@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Enhanced Discord + Snusbase Reporter
-- Standard mode: Processes users from twitter_users.txt file
-- Discord input mode: Monitors a Discord webhook for uploaded text files with usernames
+- Monitors a Discord webhook for uploaded text files with usernames
 - Progress/results messages: DISCORD_WEBHOOK (auto-deleted, no sensitive details)
 - Final output: FINISH_WEBHOOK (kept, formatted as code block)
 """
@@ -46,7 +45,6 @@ IP_WHOIS_URL = "https://api.snusbase.com/tools/ip-whois"
 BREACH_FILTER = "TWITTER_COM"
 CONCURRENCY = 8
 RATE_LIMIT_DELAY = 0.12
-INPUT_FILE = "twitter_users.txt"
 CHECK_INTERVAL = 60  # How often to check Discord for new files (seconds)
 # -------------------
 
@@ -182,35 +180,6 @@ def extract_handle(link: str, domain: str) -> str:
     except Exception: 
         return ""
 
-def load_users_from_file(filename="twitter_users.txt") -> List[Dict[str, str]]:
-    """Load user data from a file"""
-    users = []
-    try:
-        with open(filename, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip(): 
-                    continue
-                parts = [x.strip() for x in line.strip().split("|")]
-                if len(parts) >= 2:
-                    username_tag = parts[0]
-                    twitter_link = parts[1]
-                    twitch_link = parts[2] if len(parts) > 2 else ""
-                    
-                    if "#" in username_tag:
-                        username, discriminator = username_tag.split("#", 1)
-                    else: 
-                        username, discriminator = username_tag, ""
-                        
-                    users.append({
-                        "username": username, 
-                        "discriminator": discriminator,
-                        "twitter_link": twitter_link, 
-                        "twitch_link": twitch_link
-                    })
-    except FileNotFoundError: 
-        logger.warning(f"Could not find {filename}.")
-    return users
-
 def load_users_from_text(text: str) -> List[Dict[str, str]]:
     """Parse user data from text content"""
     users = []
@@ -326,7 +295,7 @@ class ProgressReporter:
         
         msg_id = send_discord_message(
             self.webhook,
-            f"**Starting {self.phase_name}** — 0/{self.total}",
+            f"Starting {self.phase_name} — 0/{self.total}",
             username=self.username,
             return_id=True
         )
@@ -337,7 +306,7 @@ class ProgressReporter:
         """Report progress on a single step"""
         msg_id = send_discord_message(
             self.webhook,
-            f"Going through **{index1}/{self.total}**: `{label}`",
+            f"Going through {index1}/{self.total}: `{label}`",
             username=self.username,
             return_id=True
         )
@@ -375,7 +344,7 @@ class ProgressReporter:
             
         msg_id = send_discord_message(
             self.webhook,
-            f"**Result for** `{label}`:\n{text}",
+            f"Result for `{label}`:\n{text}",
             username=self.username,
             return_id=True
         )
@@ -387,9 +356,9 @@ class ProgressReporter:
         """Finish reporting and clean up messages"""
         elapsed = time.time() - self.start_ts
         summary = (
-            f"✅ **Finished {self.phase_name}** in {elapsed:.1f}s\n"
-            f"- Total: **{self.total}**\n"
-            f"- OK: **{self.count_ok}** | Skipped: **{self.count_skip}** | No Results: **{self.count_nores}**"
+            f"✅ Finished {self.phase_name} in {elapsed:.1f}s\n"
+            f"- Total: {self.total}\n"
+            f"- OK: {self.count_ok} | Skipped: {self.count_skip} | No Results: {self.count_nores}"
         )
         if self.summary_to_finish:
             send_discord_message(self.finish_webhook, summary, username=self.username)
@@ -684,38 +653,6 @@ def process_webhook_messages():
             processed_message_ids.clear()
             processed_message_ids.update(msg.get("id") for msg in messages[:500])
 
-def run_discord_monitor():
-    """Run the Discord webhook monitor as a background thread"""
-    while True:
-        try:
-            process_webhook_messages()
-        except Exception as e:
-            logger.error(f"Error in Discord monitor: {e}")
-        
-        time.sleep(CHECK_INTERVAL)
-
-def process_file(filename=INPUT_FILE):
-    """Process users from a file (original functionality)"""
-    users = load_users_from_file(filename)
-    if not users:
-        logger.error("No users loaded. Ensure the input file exists and has the correct format:")
-        logger.error("  Username#Tag | https://twitter.com/handle | https://twitch.tv/handle (optional)")
-        return False
-        
-    logger.info(f"Loaded {len(users)} users from {filename}")
-    
-    email_user_map = first_pass(users, DISCORD_WEBHOOK, FINISH_WEBHOOK)
-    if not email_user_map:
-        send_discord_message(
-            FINISH_WEBHOOK or DISCORD_WEBHOOK, 
-            "**No emails collected in first pass.**", 
-            username="Emails"
-        )
-        return False
-        
-    second_pass(email_user_map, DISCORD_WEBHOOK, FINISH_WEBHOOK)
-    return True
-
 def main():
     """Main entry point"""
     if not DISCORD_WEBHOOK.startswith("https://"):
@@ -729,27 +666,29 @@ def main():
     if INPUT_WEBHOOK and not INPUT_WEBHOOK.startswith("https://"):
         logger.error("INPUT_WEBHOOK looks invalid.")
         return 1
-        
-    # Start the Discord monitor thread if we have an input webhook
-    if INPUT_WEBHOOK:
-        logger.info(f"Starting Discord monitor for webhook: {INPUT_WEBHOOK}")
-        monitor_thread = threading.Thread(target=run_discord_monitor, daemon=True)
-        monitor_thread.start()
-        
-    # Process the input file (original functionality)
-    process_file(INPUT_FILE)
     
-    # If we started a Discord monitor, keep the main thread alive
-    if INPUT_WEBHOOK:
-        try:
-            while True:
-                time.sleep(60)
-        except KeyboardInterrupt:
-            logger.info("Keyboard interrupt received, shutting down...")
-            return 0
+    # Send a startup message to the input webhook
+    send_discord_message(
+        INPUT_WEBHOOK,
+        "Snusbase Reporter started and monitoring for file uploads. Upload a text file with user data to process.",
+        username="Snusbase Reporter"
+    )
+    
+    # Run the webhook monitor in the main thread
+    logger.info(f"Starting Discord monitor for webhook: {INPUT_WEBHOOK}")
+    try:
+        while True:
+            try:
+                process_webhook_messages()
+            except Exception as e:
+                logger.error(f"Error in Discord monitor: {e}")
+            time.sleep(CHECK_INTERVAL)
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received, shutting down...")
     
     return 0
 
 if __name__ == "__main__":
     exit_code = main()
+    exit(exit_code)n()
     exit(exit_code)
