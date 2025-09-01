@@ -4,7 +4,7 @@
 Advanced Discord Bot with PDF Processing
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-01 11:03:20
+Last updated: 2025-09-01 11:24:15
 """
 
 import os
@@ -17,6 +17,7 @@ import io
 import tempfile
 import sys
 import random
+import threading
 from typing import List, Dict, Tuple, Union, Optional
 from collections import defaultdict
 import requests
@@ -51,8 +52,8 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-01 11:03:20"
-BOT_USER = "eregeg345435"
+LAST_UPDATED = "2025-09-01 11:24:15"
+BOT_USER = "eregeg34543545"
 
 # Epic API base URL
 API_BASE = "https://api.proswapper.xyz/external"
@@ -64,158 +65,32 @@ HEADERS = {
     "Accept": "application/json, text/plain, */*",
 }
 
-# List of proxies to use for API lookups
+# List of proxies to use for API lookups (using only specified proxies)
 PROXIES = [
-    "51.159.5.19:13128",
-    "14.225.3.194:3128",
-    "103.172.196.221:8080",
-    "186.215.87.194:30010",
-    "45.167.126.168:999",
-    "66.36.234.130:1339",
-    "152.53.194.55:24657",
-    "42.96.16.176:1312",
-    "38.127.172.60:24171",
-    "38.191.214.4:999",
-    "103.144.90.75:8082",
-    "39.110.235.25:13128",
-    "49.229.100.235:8080",
-    "222.59.173.105:45108",
-    "190.52.99.220:999",
-    "185.4.29.243:7887",
-    "186.96.70.57:999",
-    "103.41.250.97:8080",
-    "152.53.194.55:14691",
-    "152.53.194.55:58872",
-    "5.252.74.3:30001",
-    "27.147.129.26:5050",
-    "45.22.209.157:8888",
-    "38.194.246.34:999",
-    "116.102.106.101:10007",
-    "36.136.27.2:4999",
-    "41.223.119.156:3128",
-    "102.23.245.112:8080",
-    "171.239.232.119:10002",
-    "219.93.111.125:9412",
-    "190.93.102.136:999",
-    "102.213.248.38:8080",
-    "103.161.69.233:2698",
-    "152.53.194.46:8065",
-    "91.84.99.28:80",
-    "116.100.250.40:10028",
-    "116.100.250.40:10005",
-    "187.111.144.102:8080",
-    "213.221.43.246:8088",
-    "5.252.74.5:30003",
-    "40.71.46.210:8214",
-    "157.180.121.252:16621",
-    "222.59.173.105:45085",
-    "72.10.160.170:3949",
-    "181.78.197.235:999",
-    "13.211.233.22:36619",
-    "103.177.235.207:83",
-    "116.98.40.45:1452",
-    "45.167.126.170:999",
-    "119.148.35.38:4840",
-    "117.161.170.163:9348",
-    "222.59.173.105:45104",
-    "152.53.194.55:59837",
-    "222.59.173.105:45219",
-    "202.162.195.54:8080",
-    "222.59.173.105:45148",
-    "191.97.14.189:999",
-    "38.127.172.50:24171",
-    "38.127.172.79:24171",
-    "157.20.236.8:3128",
-    "103.156.16.45:8080",
-    "152.53.194.55:25320",
-    "115.178.49.47:8080",
-    "176.126.103.194:44214",
-    "23.237.210.82:80",
-    "38.127.172.106:24171",
-    "47.247.141.78:8080",
-    "38.127.172.252:24171",
-    "154.0.14.116:3128",
-    "77.110.114.116:8081",
-    "116.100.250.40:10012",
-    "85.133.240.75:8080",
-    "27.124.81.146:8080",
-    "186.96.50.113:999",
-    "38.52.155.166:999",
-    "171.228.184.67:5107",
-    "115.72.39.21:8080",
-    "51.159.159.73:80",
-    "41.33.142.182:8081",
-    "167.99.172.98:8118",
-    "103.158.252.196:8090",
-    "38.191.209.130:999",
-    "103.161.69.252:2698",
-    "157.180.121.252:35993",
-    "38.172.128.104:999",
-    "201.62.125.142:8080",
-    "46.16.229.254:8079",
-    "175.118.246.102:3128",
-    "200.215.248.112:999",
-    "123.200.31.210:100",
-    "61.144.152.124:9000",
-    "103.137.91.250:8080",
-    "171.228.187.56:5107",
-    "157.10.97.229:8080",
-    "209.14.98.5:8080",
-    "157.180.121.252:35519",
-    "40.172.232.213:13279",
-    "195.133.220.46:1971",
-    "115.72.42.175:10002",
-    "200.205.60.2:8080",
-    "222.127.227.102:8082",
-    "116.97.3.251:1002",
-    "38.180.2.107:3128",
-    "222.74.73.202:42055",
-    "179.96.28.58:80",
-    "201.182.242.211:999",
-    "154.62.226.126:8888",
-    "185.191.236.162:3128",
-    "171.228.185.99:5102",
-    "38.127.172.239:24171",
-    "154.236.177.105:1976",
-    "103.230.81.121:8080",
-    "77.238.103.98:8080",
-    "186.96.111.214:999",
-    "132.145.75.68:5457",
-    "188.132.221.189:8080",
-    "94.156.152.115:3128",
-    "41.33.203.238:1981",
-    "181.196.207.114:999",
-    "45.174.95.142:999",
-    "157.180.121.252:53919",
-    "1.0.170.50:8080",
-    "157.180.121.252:55503",
-    "5.252.74.6:30004",
-    "171.228.128.206:5102",
-    "64.92.82.61:8081",
-    "45.71.15.2:8080",
-    "38.172.131.64:999",
-    "171.228.187.56:5104",
-    "178.252.171.230:8080",
-    "183.88.220.245:8080",
-    "36.147.78.166:80",
-    "38.127.172.127:24171",
-    "171.227.178.16:1008",
-    "190.242.157.215:8080",
     "45.89.53.245:3128",
-    "38.188.178.1:999",
-    "113.116.180.180:9000",
-    "171.228.191.8:5107",
-    "46.19.68.45:4555",
-    "116.100.250.40:10006",
-    "120.50.11.225:8080",
-    "27.76.166.182:10003",
+    "66.36.234.130:1339",
     "45.167.126.1:8080",
-    "188.132.221.8:8080",
-    "216.195.100.57:3129",
-    "103.163.24.48:10002",
-    "115.77.160.145:10001",
-    "45.123.142.146:8181"
+    "190.242.157.215:8080",
+    "154.62.226.126:8888",
+    "51.159.159.73:80",
+    "176.126.103.194:44214",
+    "185.191.236.162:3128",
+    "157.180.121.252:35993",
+    "157.180.121.252:16621",
+    "157.180.121.252:55503",
+    "157.180.121.252:53919",
+    "175.118.246.102:3128",
+    "64.92.82.61:8081",
+    "132.145.75.68:5457",
+    "157.180.121.252:35519",
+    "77.110.114.116:8081"
 ]
+
+# Currently active proxy for API requests
+current_proxy = None
+proxy_last_checked = 0
+proxy_check_interval = 60  # Check proxy every 60 seconds
+proxy_lock = threading.Lock()
 
 # Default to 0 - will be set by the user with the setup command
 NAMES_CHANNEL_ID = 0  # Channel for user submissions
@@ -255,42 +130,84 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 processing_lock = asyncio.Lock()
 
 
-def find_working_proxy():
-    """Test proxies and find a working one"""
-    # Shuffle the proxy list to try different ones first
-    test_proxies = PROXIES.copy()
-    random.shuffle(test_proxies)
-    
-    # Test URL - using a known endpoint that should return quickly
-    test_url = "https://api.proswapper.xyz/external/name/test"
-    
-    for proxy in test_proxies:
-        proxy_dict = {
-            'http': f'http://{proxy}',
-            'https': f'http://{proxy}'
-        }
-        
-        try:
-            # Set a short timeout to quickly skip non-working proxies
-            response = requests.get(test_url, proxies=proxy_dict, timeout=3, headers=HEADERS)
-            
-            # If we get any response (even an error), the proxy is working
-            if response.status_code:
-                logger.info(f"Found working proxy: {proxy}")
-                return proxy
-        except:
-            # If connection fails, try the next proxy
-            continue
-    
-    # If no proxy works, return None
-    logger.warning("No working proxy found")
-    return None
-
-
-def epic_lookup_with_proxy(value, mode=None, timeout=12.0):
+def find_working_proxy(force_check=False):
     """
-    Look up Epic account info using proxies to avoid IP blocking.
-    First tries to find a working proxy, then falls back to direct connection if needed.
+    Find a working proxy from the list. If a working proxy is already found and hasn't expired,
+    return that one. Otherwise, test all proxies to find a new one.
+    
+    Returns the proxy string if found, None otherwise.
+    """
+    global current_proxy, proxy_last_checked
+    
+    with proxy_lock:
+        current_time = time.time()
+        
+        # If we already have a working proxy and it hasn't expired, use it
+        if not force_check and current_proxy and (current_time - proxy_last_checked) < proxy_check_interval:
+            return current_proxy
+        
+        # Shuffle proxies to avoid always testing them in the same order
+        shuffled_proxies = PROXIES.copy()
+        random.shuffle(shuffled_proxies)
+        
+        # Test URL - using a known endpoint that should return quickly
+        test_url = "https://api.proswapper.xyz/external/name/test"
+        
+        # First, test the current proxy if we have one
+        if current_proxy and current_proxy in shuffled_proxies:
+            proxy_dict = {
+                'http': f'http://{current_proxy}',
+                'https': f'http://{current_proxy}'
+            }
+            
+            try:
+                # Set a short timeout for quick testing
+                response = requests.get(test_url, proxies=proxy_dict, timeout=3, headers=HEADERS)
+                
+                # If we get a successful response, keep using this proxy
+                if response.status_code == 200:
+                    logger.info(f"Current proxy still working: {current_proxy}")
+                    proxy_last_checked = current_time
+                    return current_proxy
+            except:
+                # If current proxy fails, continue to testing others
+                logger.info(f"Current proxy no longer working: {current_proxy}")
+                pass
+        
+        # Test all other proxies
+        for proxy in shuffled_proxies:
+            if proxy == current_proxy:  # Skip the one we just tested
+                continue
+                
+            proxy_dict = {
+                'http': f'http://{proxy}',
+                'https': f'http://{proxy}'
+            }
+            
+            try:
+                # Set a short timeout for quick testing
+                response = requests.get(test_url, proxies=proxy_dict, timeout=3, headers=HEADERS)
+                
+                # If we get a successful response, use this proxy
+                if response.status_code == 200:
+                    logger.info(f"Found new working proxy: {proxy}")
+                    current_proxy = proxy
+                    proxy_last_checked = current_time
+                    return proxy
+            except:
+                # If connection fails, try the next proxy
+                continue
+        
+        # If no proxy works, reset current proxy and return None
+        logger.warning("No working proxy found")
+        current_proxy = None
+        return None
+
+
+def epic_lookup(value, mode=None, timeout=12.0):
+    """
+    Look up Epic account info by display name or account ID.
+    Uses the current working proxy.
     """
     value = (value or "").strip()
     if not value:
@@ -303,12 +220,14 @@ def epic_lookup_with_proxy(value, mode=None, timeout=12.0):
 
     url = f"{API_BASE}/{mode}/{value}"
     
-    # Try with proxy first
-    working_proxy = find_working_proxy()
-    if working_proxy:
+    # Get the current working proxy (find a new one if needed)
+    proxy = find_working_proxy()
+    
+    if proxy:
+        # We have a working proxy, use it
         proxy_dict = {
-            'http': f'http://{working_proxy}',
-            'https': f'http://{working_proxy}'
+            'http': f'http://{proxy}',
+            'https': f'http://{proxy}'
         }
         
         try:
@@ -316,25 +235,25 @@ def epic_lookup_with_proxy(value, mode=None, timeout=12.0):
             if resp.status_code == 404:
                 return {"status": "INACTIVE", "message": "Account not found or inactive"}
             if resp.status_code == 403:
-                logger.info("403 error with proxy, will try another approach")
-                # Don't return here, fall through to no-proxy attempt
-            else:
-                resp.raise_for_status()
-                return resp.json()
+                # Force find a new proxy for next time since this one might be getting blocked
+                threading.Thread(target=lambda: find_working_proxy(force_check=True)).start()
+                # But still return the error for this attempt
+                return {"status": "FORBIDDEN", "message": "403 Forbidden — API access denied"}
+            resp.raise_for_status()
+            return resp.json()
         except requests.exceptions.RequestException:
-            # If proxy fails, we'll try without proxy
-            logger.info(f"Proxy {working_proxy} failed, trying without proxy")
+            # If proxy fails for this specific request, force finding a new one next time
+            threading.Thread(target=lambda: find_working_proxy(force_check=True)).start()
         except Exception as e:
             logger.error(f"Error with proxy request: {e}")
-            # Continue to try without proxy
     
-    # Try without proxy as fallback
+    # If we don't have a proxy or it failed, try direct connection as last resort
     try:
         resp = requests.get(url, headers=HEADERS, timeout=timeout)
         if resp.status_code == 404:
             return {"status": "INACTIVE", "message": "Account not found or inactive"}
         if resp.status_code == 403:
-            return {"status": "FORBIDDEN", "message": "403 Forbidden — host/IP or headers blocked by API"}
+            return {"status": "FORBIDDEN", "message": "403 Forbidden — API access denied"}
         resp.raise_for_status()
         return resp.json()
     except requests.exceptions.HTTPError as e:
@@ -343,48 +262,6 @@ def epic_lookup_with_proxy(value, mode=None, timeout=12.0):
     except Exception as e:
         logger.error(f"Error in epic_lookup: {e}")
         return {"status": "ERROR", "message": f"Error: {e}"}
-
-
-def epic_lookup_direct(value, mode="name"):
-    """
-    Most direct API lookup, tries with and without proxies
-    """
-    if not value:
-        return {"error": "No lookup value provided"}
-    
-    # Use absolutely minimal request to avoid detection
-    url = f"https://api.proswapper.xyz/external/{mode}/{value}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    
-    # First try with a working proxy
-    working_proxy = find_working_proxy()
-    if working_proxy:
-        proxy_dict = {
-            'http': f'http://{working_proxy}',
-            'https': f'http://{working_proxy}'
-        }
-        
-        try:
-            resp = requests.get(url, headers=headers, proxies=proxy_dict, timeout=5)
-            if resp.status_code == 200:
-                return resp.json()
-            # If proxy fails with non-200, we'll try without proxy
-        except:
-            # If proxy connection fails, we'll try without proxy
-            pass
-    
-    # Try without proxy as fallback
-    try:
-        resp = requests.get(url, headers=headers, timeout=5)
-        if resp.status_code != 200:
-            return {"error": f"API returned status code {resp.status_code}"}
-            
-        try:
-            return resp.json()
-        except:
-            return {"error": "Could not parse API response as JSON"}
-    except Exception as e:
-        return {"error": f"Request failed: {str(e)}"}
 
 
 async def check_account_status(account_id):
@@ -404,7 +281,7 @@ async def check_account_status(account_id):
     try:
         result = await loop.run_in_executor(
             None, 
-            lambda: epic_lookup_with_proxy(account_id, mode="id")
+            lambda: epic_lookup(account_id, mode="id")
         )
         
         # If the account is active and result is a dict (not an error response), add status
@@ -736,9 +613,9 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
                 await ctx.send(f"⚠️ This PDF has already been searched (Account ID: {info['account_id']})")
                 return
                 
-            # Check current account status using the API with proxy
+            # Check current account status using the API
             if info['account_id']:
-                status_message = await ctx.send(f"🔍 Checking current account status for ID: `{info['account_id']}` (using proxy if available)...")
+                status_message = await ctx.send(f"🔍 Checking current account status for ID: `{info['account_id']}`...")
                 account_status = await check_account_status(info['account_id'])
                 info['account_status'] = account_status
                 await status_message.edit(content=f"✅ Account status check complete.")
@@ -912,6 +789,18 @@ async def check_premium_access(ctx):
     return True
 
 
+# Background task to periodically check for working proxies
+async def proxy_maintenance_task():
+    """Background task to periodically check proxies"""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        # Ensure we always have a working proxy ready
+        find_working_proxy()
+        
+        # Wait for a while before checking again (don't hit the API too much)
+        await asyncio.sleep(60)  # Check every minute
+
+
 @bot.event
 async def on_ready():
     """Called when the bot is ready"""
@@ -922,13 +811,13 @@ async def on_ready():
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
     print(f"Current Time (UTC): {LAST_UPDATED}")
+    print(f"Using {len(PROXIES)} proxies for API lookups")
     
-    # Test if any proxies work
-    working_proxy = find_working_proxy()
-    if working_proxy:
-        print(f"Found a working proxy: {working_proxy}")
-    else:
-        print("No working proxies found. Will use direct connections.")
+    # Start proxy maintenance task
+    bot.loop.create_task(proxy_maintenance_task())
+    
+    # Find a working proxy immediately so it's ready for the first command
+    threading.Thread(target=find_working_proxy).start()
     
     # Automatically authorize the first person who uses the bot
     global authorized_users
@@ -1064,34 +953,18 @@ async def lookup_command(ctx, value, mode=None):
         await ctx.send("Mode must be 'name' or 'id'. Using auto-detect instead.")
         mode = "id" if _HEX32.match(value) else "name"
 
-    # Find a working proxy first
-    working_proxy = find_working_proxy()
-    proxy_status = f"using proxy {working_proxy}" if working_proxy else "using direct connection (no working proxy found)"
-    await ctx.send(f"🔍 Looking up Epic account by {mode}: `{value}`... ({proxy_status})")
+    await ctx.send(f"🔍 Looking up Epic account by {mode}: `{value}`...")
     
-    # Try the proxy-enabled lookup method
     result = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: epic_lookup_with_proxy(value, mode)
+        None, lambda: epic_lookup(value, mode)
     )
-    
+
     # Handle explicit error dicts
     if isinstance(result, dict) and result.get("status") in {"ERROR", "INACTIVE", "FORBIDDEN", "INVALID"}:
         await ctx.send(f"❌ {result.get('message', 'Lookup failed')}")
-        await ctx.send("Trying direct API URL as fallback...")
-        
-        # Try direct lookup as fallback
-        direct_result = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: epic_lookup_direct(value, mode)
-        )
-        
-        if direct_result and not direct_result.get("error"):
-            await ctx.send("✅ Direct API lookup successful!")
-            result = direct_result
-        else:
-            await ctx.send(f"❌ Direct API lookup also failed: {direct_result.get('error', 'Unknown error')}")
-            await ctx.send("You can try the API URL directly in your browser:\n" +
-                         f"`https://api.proswapper.xyz/external/{mode}/{value}`")
-            return
+        await ctx.send("You can try the API URL directly in your browser:\n" +
+                      f"`https://api.proswapper.xyz/external/{mode}/{value}`")
+        return
 
     try:
         # NAME LOOKUP -> list of accounts
@@ -1198,13 +1071,18 @@ async def test_proxies_command(ctx):
     
     await ctx.send("Testing proxies... this may take a moment.")
     
-    # Test each proxy
-    working_proxies = []
+    # Use a shorter timeout for this test to be faster
     test_url = "https://api.proswapper.xyz/external/name/test"
+    working_count = 0
+    total_proxies = len(PROXIES)
+    
+    # Progress updates
+    progress_msg = await ctx.send(f"Progress: 0/{total_proxies} tested")
+    working_list = []
     
     for i, proxy in enumerate(PROXIES):
-        if i % 20 == 0 and i > 0:
-            await ctx.send(f"Testing proxy {i}/{len(PROXIES)}...")
+        if (i+1) % 10 == 0 or i+1 == total_proxies:
+            await progress_msg.edit(content=f"Progress: {i+1}/{total_proxies} tested, {working_count} working")
             
         proxy_dict = {
             'http': f'http://{proxy}',
@@ -1212,27 +1090,55 @@ async def test_proxies_command(ctx):
         }
         
         try:
-            # Set a short timeout to quickly skip non-working proxies
+            # Short timeout since we're just testing
             response = requests.get(test_url, proxies=proxy_dict, timeout=2, headers=HEADERS)
             
-            # If we get any response (even an error), the proxy is working
+            # If we get any response, the proxy is working
             if response.status_code:
-                working_proxies.append(proxy)
+                working_count += 1
+                working_list.append(proxy)
         except:
             # If connection fails, skip this proxy
             continue
     
-    # Report results
-    if working_proxies:
-        await ctx.send(f"✅ Found {len(working_proxies)} working proxies out of {len(PROXIES)}:")
-        
-        # Send proxies in batches to avoid message limit
+    # Send final results
+    await ctx.send(f"✅ Found {working_count} working proxies out of {total_proxies}")
+    
+    # Send working proxies in batches to avoid message limit
+    if working_list:
         batch_size = 20
-        for i in range(0, len(working_proxies), batch_size):
-            batch = working_proxies[i:i+batch_size]
+        for i in range(0, len(working_list), batch_size):
+            batch = working_list[i:i+batch_size]
             await ctx.send("```\n" + "\n".join(batch) + "\n```")
+
+
+@bot.command(name='currentproxy')
+async def current_proxy_command(ctx):
+    """Show the currently active proxy"""
+    # Check premium access
+    if not await check_premium_access(ctx):
+        return
+    
+    if current_proxy:
+        # Test if the current proxy is still working
+        proxy_dict = {
+            'http': f'http://{current_proxy}',
+            'https': f'http://{current_proxy}'
+        }
+        
+        try:
+            response = requests.get("https://api.proswapper.xyz/external/name/test", 
+                                   proxies=proxy_dict, timeout=3, headers=HEADERS)
+            if response.status_code == 200:
+                status = "✅ WORKING"
+            else:
+                status = f"❌ NOT WORKING (Status: {response.status_code})"
+        except:
+            status = "❌ NOT WORKING (Connection Error)"
+            
+        await ctx.send(f"Current proxy: `{current_proxy}`\nStatus: {status}")
     else:
-        await ctx.send("❌ No working proxies found.")
+        await ctx.send("No proxy is currently active. Using direct connections.")
 
 
 @bot.command(name='reset')
@@ -1264,12 +1170,13 @@ async def version_info(ctx):
                     value=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
                     inline=True)
     
-    # Test if any proxies work
-    working_proxy = find_working_proxy()
-    if working_proxy:
-        embed.add_field(name="Proxy Status", value=f"Working proxy available: {working_proxy}", inline=False)
+    # Show proxy status
+    if current_proxy:
+        embed.add_field(name="Proxy Status", 
+                        value=f"Using proxy for API lookups\nCurrent proxy last checked: {time.strftime('%H:%M:%S', time.localtime(proxy_last_checked))} UTC", 
+                        inline=False)
     else:
-        embed.add_field(name="Proxy Status", value="No working proxies found, using direct connections", inline=False)
+        embed.add_field(name="Proxy Status", value="No working proxy found, using direct connections", inline=False)
         
     embed.set_footer(text=f"Bot is running on {os.name.upper()} platform")
     await ctx.send(embed=embed)
@@ -1300,6 +1207,10 @@ async def custom_commands_help(ctx):
         
         embed.add_field(name="!testproxies",
                         value="Test all proxies to see which ones are working",
+                        inline=False)
+                        
+        embed.add_field(name="!currentproxy",
+                        value="Show the currently active proxy and its status",
                         inline=False)
                     
         embed.add_field(name="!setup #channel1 #channel2 #channel3",
@@ -1337,9 +1248,17 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print("Current Time (UTC): 2025-09-01 11:03:20")
+    print("Current Time (UTC): 2025-09-01 11:24:15")
     print("Use Ctrl+C to stop")
     print(f"Using {len(PROXIES)} proxies for API lookups")
+    
+    # Find a working proxy before starting the bot
+    print("Finding working proxy...")
+    working_proxy = find_working_proxy()
+    if working_proxy:
+        print(f"Found working proxy: {working_proxy}")
+    else:
+        print("No working proxy found. Will start without a proxy.")
     
     try:
         bot.run(BOT_TOKEN)
