@@ -4,7 +4,7 @@
 Advanced Discord Bot with PDF Processing
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-01 10:19:04
+Last updated: 2025-09-01 10:29:58
 """
 
 import os
@@ -50,7 +50,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-01 10:19:04"
+LAST_UPDATED = "2025-09-01 10:29:58"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -59,20 +59,14 @@ _HEX32 = re.compile(r"^[0-9a-fA-F]{32}$")
 
 # Use browser-like headers (important: default python-requests often gets 403)
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0 Safari/537.36"
+    ),
+    "Accept": "application/json,text/plain,*/*",
     "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://proswapper.xyz/",
-    "Origin": "https://proswapper.xyz",
-    "sec-ch-ua": "\"Chromium\";v=\"122\", \"Google Chrome\";v=\"122\", \"Not:A-Brand\";v=\"99\"",
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": "\"Windows\"",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-site",
     "Connection": "keep-alive",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
 }
 
 # Default to 0 - will be set by the user with the setup command
@@ -116,74 +110,35 @@ processing_lock = asyncio.Lock()
 def epic_lookup(value, mode=None, timeout=12.0):
     """
     Look up Epic account info by display name or account ID.
-    Uses a more browser-like request approach to avoid 403 errors.
+
+    - value: display name OR 32-char account ID
+    - mode: "name" or "id" (auto-detected if None)
+    Returns:
+      - name lookup -> list[dict]
+      - id lookup   -> dict
+      - or an error dict: {"status": "...", "message": "..."}
     """
     value = (value or "").strip()
     if not value:
-        raise ValueError("Please provide a display name or account ID")
+        return {"status": "ERROR", "message": "Please provide a display name or account ID"}
 
     if mode is None:
         mode = "id" if _HEX32.match(value) else "name"
     elif mode not in {"name", "id"}:
-        raise ValueError("mode must be 'name', 'id', or None")
+        return {"status": "ERROR", "message": "mode must be 'name', 'id', or None"}
 
     url = f"{API_BASE}/{mode}/{value}"
-    
-    # Enhanced browser-like headers
-    browser_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://proswapper.xyz/",
-        "Origin": "https://proswapper.xyz",
-        "sec-ch-ua": "\"Chromium\";v=\"122\", \"Google Chrome\";v=\"122\", \"Not:A-Brand\";v=\"99\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"Windows\"",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-site",
-        "Connection": "keep-alive",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-    }
-    
-    session = requests.Session()  # Use a session for better cookie handling
-    
     try:
-        # First visit the main site to get any cookies
-        session.get("https://proswapper.xyz/", headers=browser_headers, timeout=timeout)
-        
-        # Then make the API request
-        resp = session.get(url, headers=browser_headers, timeout=timeout)
-        resp.raise_for_status()
-        
-        # Parse JSON response
-        try:
-            return resp.json()
-        except json.JSONDecodeError:
-            # If we get here, we got a successful response but it's not valid JSON
-            # This could be the raw JSON string from the screenshot
-            if resp.text and resp.text.strip():
-                try:
-                    return json.loads(resp.text)
-                except:
-                    pass
-            return {"status": "ERROR", "message": "Invalid JSON response from API"}
-            
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            # Account not found - it's inactive
+        resp = requests.get(url, headers=HEADERS, timeout=timeout)
+        if resp.status_code == 404:
             return {"status": "INACTIVE", "message": "Account not found or inactive"}
+        if resp.status_code == 403:
+            return {"status": "FORBIDDEN", "message": "403 Forbidden — host/IP or headers blocked by API"}
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.HTTPError as e:
         logger.error(f"HTTP error in epic_lookup: {e}")
-        
-        # For debugging
-        error_info = {
-            "status": "ERROR",
-            "status_code": e.response.status_code if hasattr(e, 'response') and e.response else "unknown",
-            "message": f"HTTP error: {e}"
-        }
-        return error_info
-        
+        return {"status": "ERROR", "message": f"HTTP error: {e}"}
     except Exception as e:
         logger.error(f"Error in epic_lookup: {e}")
         return {"status": "ERROR", "message": f"Error: {e}"}
@@ -196,11 +151,7 @@ def direct_epic_lookup(username):
     browser_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
-        "Referer": "https://proswapper.xyz/",
-        "Origin": "https://proswapper.xyz",
-        "sec-ch-ua": "\"Chromium\";v=\"122\", \"Google Chrome\";v=\"122\", \"Not:A-Brand\";v=\"99\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"Windows\"",
+        "Accept-Language": "en-US,en;q=0.9",
     }
     
     try:
@@ -231,8 +182,8 @@ async def check_account_status(account_id):
             lambda: epic_lookup(account_id, mode="id")
         )
         
-        # If the account is active, add status information
-        if result and "status" not in result:
+        # If the account is active and result is a dict (not an error response), add status
+        if result and isinstance(result, dict) and "status" not in result:
             result["status"] = "ACTIVE"
             
         return result
@@ -630,7 +581,7 @@ async def send_pdf_analysis(ctx, info):
     if info.get('account_status'):
         status_data = info['account_status']
         
-        if status_data.get('status') == 'ACTIVE':
+        if isinstance(status_data, dict) and status_data.get('status') == 'ACTIVE':
             output += "**🟢 ACCOUNT CURRENTLY ACTIVE**\n"
             
             # Include current display name if available
@@ -657,18 +608,18 @@ async def send_pdf_analysis(ctx, info):
                         output += f"- {platform}: {link_data}\n"
                 output += "\n"
                 
-        elif status_data.get('status') == 'INACTIVE':
+        elif isinstance(status_data, dict) and status_data.get('status') == 'INACTIVE':
             output += "**🔴 ACCOUNT CURRENTLY INACTIVE**\n"
             if 'message' in status_data:
                 output += f"{status_data['message']}\n"
             output += "The account may have been banned, deleted, or changed username.\n\n"
             
-        elif status_data.get('status') == 'ERROR':
+        elif isinstance(status_data, dict) and status_data.get('status') in ['ERROR', 'FORBIDDEN']:
             output += "**⚠️ ERROR CHECKING ACCOUNT STATUS**\n"
             if 'message' in status_data:
                 output += f"{status_data['message']}\n\n"
         
-        elif status_data.get('status') == 'INVALID':
+        elif isinstance(status_data, dict) and status_data.get('status') == 'INVALID':
             output += "**⚠️ INVALID ACCOUNT ID FORMAT**\n"
             if 'message' in status_data:
                 output += f"{status_data['message']}\n\n"
@@ -734,10 +685,6 @@ async def check_premium_access(ctx):
     return True
 
 
-# Store a reference to the original on_message event
-original_on_message = bot.event(asyncio.coroutine(lambda *args, **kwargs: None))
-
-
 @bot.event
 async def on_ready():
     """Called when the bot is ready"""
@@ -754,7 +701,6 @@ async def on_ready():
         print("No authorized users yet. The first user to interact will be automatically authorized.")
 
 
-# Process events separately to avoid issues with the on_message event
 @bot.event
 async def on_message(message):
     """Called when a message is sent to a channel the bot can see"""
@@ -871,100 +817,102 @@ async def lookup_command(ctx, value, mode=None):
     # Check premium access
     if not await check_premium_access(ctx):
         return
-    
+
     if not value:
         await ctx.send("Please provide a display name or account ID to look up.")
         return
-        
+
     # Auto-detect mode if not provided
     if mode is None:
         mode = "id" if _HEX32.match(value) else "name"
     elif mode not in ["name", "id"]:
-        await ctx.send("Mode must be 'name' or 'id'. Using auto-detection instead.")
+        await ctx.send("Mode must be 'name' or 'id'. Using auto-detect instead.")
         mode = "id" if _HEX32.match(value) else "name"
-    
+
     await ctx.send(f"🔍 Looking up Epic account by {mode}: `{value}`...")
-    
+
     try:
         result = await asyncio.get_event_loop().run_in_executor(
             None, lambda: epic_lookup(value, mode)
         )
-        
-        if result:
-            if 'status' in result and result['status'] in ['ERROR', 'INACTIVE', 'INVALID']:
-                await ctx.send(f"❌ {result.get('message', 'Unknown error')}")
-                # Try the direct lookup method as fallback
-                await ctx.send("Trying direct API lookup as fallback...")
-                direct_result = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: direct_epic_lookup(value)
-                )
-                if direct_result and not direct_result.get('error'):
-                    embed = discord.Embed(
-                        title=f"Epic Account: {direct_result.get('displayName', 'Unknown')}",
-                        color=discord.Color.green()
-                    )
-                    
-                    embed.add_field(name="Account ID", value=direct_result.get('id', 'Unknown'), inline=False)
-                    
-                    # Check for links or externalAuths
-                    if 'links' in direct_result and direct_result['links']:
-                        linked = []
-                        for platform, data in direct_result['links'].items():
-                            if isinstance(data, dict) and 'value' in data:
-                                linked.append(f"{platform}: {data['value']}")
-                            else:
-                                linked.append(f"{platform}: {data}")
-                        if linked:
-                            embed.add_field(name="Linked Accounts", value="\n".join(linked), inline=False)
-                    
-                    if 'externalAuths' in direct_result and direct_result['externalAuths']:
-                        linked = []
-                        for platform, data in direct_result['externalAuths'].items():
-                            if isinstance(data, dict) and 'externalDisplayName' in data:
-                                linked.append(f"{platform}: {data['externalDisplayName']}")
-                            else:
-                                linked.append(f"{platform}: {data}")
-                        if linked:
-                            embed.add_field(name="Linked Accounts", value="\n".join(linked), inline=False)
-                    
-                    await ctx.send("✅ Direct API lookup successful!", embed=embed)
-                else:
-                    await ctx.send("❌ Direct API lookup also failed.")
+
+        # Handle explicit error dicts from epic_lookup
+        if isinstance(result, dict) and result.get("status") in {"ERROR", "INACTIVE", "FORBIDDEN", "INVALID"}:
+            await ctx.send(f"❌ {result.get('message', 'Lookup failed')}")
+            return
+
+        # NAME LOOKUP -> list of accounts
+        if mode == "name":
+            if not isinstance(result, list):
+                await ctx.send("❌ Unexpected response format from API (expected list).")
                 return
-                
-            # Format the account info
+            if not result:
+                await ctx.send("❌ No results found.")
+                return
+
+            # Show up to 5 matches to avoid spam
+            for acc in result[:5]:
+                display_name = acc.get("displayName", "Unknown")
+                epic_id = acc.get("id", "Unknown")
+
+                embed = discord.Embed(
+                    title=f"Epic Account (name match): {display_name}",
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="Account ID", value=epic_id, inline=False)
+
+                # externalAuths may be empty {}
+                external = acc.get("externalAuths") or {}
+                if external:
+                    linked_lines = []
+                    for platform, data in external.items():
+                        if isinstance(data, dict):
+                            linked_lines.append(f"{platform}: {data.get('externalDisplayName', 'N/A')}")
+                        else:
+                            linked_lines.append(f"{platform}: {str(data)}")
+                    if linked_lines:
+                        embed.add_field(name="Linked Accounts", value="\n".join(linked_lines), inline=False)
+
+                await ctx.send(embed=embed)
+
+            # If there are more than 5, hint that more exist
+            if len(result) > 5:
+                await ctx.send(f"ℹ️ More results exist ({len(result)-5} more). Refine your name for fewer matches.")
+
+            return
+
+        # ID LOOKUP -> single account object
+        if mode == "id":
+            if not isinstance(result, dict):
+                await ctx.send("❌ Unexpected response format from API (expected object).")
+                return
+
+            display_name = result.get("displayName", "Unknown")
+            epic_id = result.get("id", value)  # fall back to input
+
             embed = discord.Embed(
-                title=f"Epic Account: {result.get('displayName', 'Unknown')}",
+                title=f"Epic Account (by ID): {display_name}",
                 color=discord.Color.green()
             )
-            
-            embed.add_field(name="Account ID", value=result.get('accountId', result.get('id', 'Unknown')), inline=False)
-            
-            # Check different field names for linked accounts
-            if 'externalAuths' in result and result['externalAuths']:
-                linked = []
-                for platform, data in result['externalAuths'].items():
-                    if isinstance(data, dict) and 'externalDisplayName' in data:
-                        linked.append(f"{platform}: {data['externalDisplayName']}")
-                    elif isinstance(data, str):
-                        linked.append(f"{platform}: {data}")
-                        
-                if linked:
-                    embed.add_field(name="Linked Accounts", value="\n".join(linked), inline=False)
-            elif 'links' in result and result['links']:
-                linked = []
-                for platform, data in result['links'].items():
-                    if isinstance(data, dict) and 'value' in data:
-                        linked.append(f"{platform}: {data['value']}")
-                    elif isinstance(data, str):
-                        linked.append(f"{platform}: {data}")
-                        
-                if linked:
-                    embed.add_field(name="Linked Accounts", value="\n".join(linked), inline=False)
-            
+            embed.add_field(name="Account ID", value=epic_id, inline=False)
+
+            external = result.get("externalAuths") or {}
+            if external:
+                linked_lines = []
+                for platform, data in external.items():
+                    if isinstance(data, dict):
+                        linked_lines.append(f"{platform}: {data.get('externalDisplayName', 'N/A')}")
+                    else:
+                        linked_lines.append(f"{platform}: {str(data)}")
+                if linked_lines:
+                    embed.add_field(name="Linked Accounts", value="\n".join(linked_lines), inline=False)
+
             await ctx.send(embed=embed)
-        else:
-            await ctx.send("❌ No results found.")
+            return
+
+        # Fallback
+        await ctx.send("❌ Unhandled mode or response format.")
+
     except Exception as e:
         logger.error(f"Error in lookup command: {e}")
         await ctx.send(f"❌ Error looking up account: {str(e)}")
@@ -984,35 +932,61 @@ async def direct_lookup_command(ctx, username):
         )
         
         if result and not result.get('error'):
-            embed = discord.Embed(
-                title=f"Epic Account: {result.get('displayName', 'Unknown')}",
-                color=discord.Color.green()
-            )
-            
-            embed.add_field(name="Account ID", value=result.get('id', result.get('accountId', 'Unknown')), inline=False)
-            
-            # Format links/externalAuths
-            if 'links' in result and result['links']:
-                linked = []
-                for platform, data in result['links'].items():
-                    if isinstance(data, dict) and 'value' in data:
-                        linked.append(f"{platform}: {data['value']}")
-                    else:
-                        linked.append(f"{platform}: {data}")
-                if linked:
-                    embed.add_field(name="Linked Accounts", value="\n".join(linked), inline=False)
+            if isinstance(result, list):
+                # Handle list response (multiple accounts)
+                for acc in result[:5]:  # Limit to 5 matches
+                    display_name = acc.get("displayName", "Unknown")
+                    epic_id = acc.get("id", "Unknown")
                     
-            if 'externalAuths' in result and result['externalAuths']:
-                linked = []
-                for platform, data in result['externalAuths'].items():
-                    if isinstance(data, dict) and 'externalDisplayName' in data:
-                        linked.append(f"{platform}: {data['externalDisplayName']}")
-                    else:
-                        linked.append(f"{platform}: {data}")
-                if linked:
-                    embed.add_field(name="Linked Accounts", value="\n".join(linked), inline=False)
-            
-            await ctx.send(embed=embed)
+                    embed = discord.Embed(
+                        title=f"Epic Account: {display_name}",
+                        color=discord.Color.green()
+                    )
+                    
+                    embed.add_field(name="Account ID", value=epic_id, inline=False)
+                    
+                    # Format linked accounts if present
+                    external = acc.get("externalAuths") or {}
+                    if external:
+                        linked_lines = []
+                        for platform, data in external.items():
+                            if isinstance(data, dict):
+                                linked_lines.append(f"{platform}: {data.get('externalDisplayName', 'N/A')}")
+                            else:
+                                linked_lines.append(f"{platform}: {str(data)}")
+                        if linked_lines:
+                            embed.add_field(name="Linked Accounts", value="\n".join(linked_lines), inline=False)
+                            
+                    await ctx.send(embed=embed)
+                
+                # If there are more than 5, hint that more exist
+                if len(result) > 5:
+                    await ctx.send(f"ℹ️ More results exist ({len(result)-5} more). Refine your name for fewer matches.")
+            else:
+                # Handle single account response (dict)
+                display_name = result.get("displayName", "Unknown")
+                epic_id = result.get("id", result.get("accountId", "Unknown"))
+                
+                embed = discord.Embed(
+                    title=f"Epic Account: {display_name}",
+                    color=discord.Color.green()
+                )
+                
+                embed.add_field(name="Account ID", value=epic_id, inline=False)
+                
+                # Format links/externalAuths
+                external = result.get("externalAuths") or {}
+                if external:
+                    linked_lines = []
+                    for platform, data in external.items():
+                        if isinstance(data, dict):
+                            linked_lines.append(f"{platform}: {data.get('externalDisplayName', 'N/A')}")
+                        else:
+                            linked_lines.append(f"{platform}: {str(data)}")
+                    if linked_lines:
+                        embed.add_field(name="Linked Accounts", value="\n".join(linked_lines), inline=False)
+                
+                await ctx.send(embed=embed)
         else:
             await ctx.send(f"❌ Error looking up account: {result.get('error', 'Unknown error')}")
     except Exception as e:
@@ -1114,7 +1088,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print("Current Time (UTC): 2025-09-01 10:19:04")
+    print("Current Time (UTC): 2025-09-01 10:29:58")
     print("Use Ctrl+C to stop")
     
     try:
