@@ -4,7 +4,7 @@
 Advanced Discord Bot with PDF Processing
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-01 11:36:00
+Last updated: 2025-09-01 11:47:49
 """
 
 import os
@@ -52,7 +52,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-01 11:36:00"
+LAST_UPDATED = "2025-09-01 11:47:49"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -61,8 +61,13 @@ _HEX32 = re.compile(r"^[0-9a-fA-F]{32}$")
 
 # Simple headers to avoid detection
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0 Safari/537.36"
+    ),
     "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
 # List of proxies to use for API lookups (using only specified proxies)
@@ -298,6 +303,31 @@ def detect_platform_from_transactions(transactions):
     
     # Default to unknown if no specific platform found
     return 'Unknown', ''
+
+
+def deduplicate_accounts(accounts_list):
+    """
+    Remove duplicate accounts from a list of account objects.
+    Duplicates are identified by having the same account ID.
+    """
+    if not isinstance(accounts_list, list):
+        return accounts_list
+        
+    # Use a dictionary to track unique accounts by ID
+    unique_accounts = {}
+    
+    for account in accounts_list:
+        # Skip if not a dict or missing ID
+        if not isinstance(account, dict):
+            continue
+            
+        # Use ID as unique identifier
+        account_id = account.get('id')
+        if account_id:
+            unique_accounts[account_id] = account
+    
+    # Return the list of unique accounts
+    return list(unique_accounts.values())
 
 
 async def check_account_status(account_id):
@@ -764,18 +794,17 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
 
 
 async def send_pdf_analysis(ctx, info):
-    """Send a clean PDF analysis format, similar to Image 7"""
+    """
+    Send a clean PDF analysis format.
+    Now with ACCOUNT ANALYSIS header and showing current account status first.
+    """
     # Get the source filename
     source_file = info.get('source_file', 'Unknown')
 
-    # Start with the header
-    output = "**📧 EMAIL CHANGE ANALYSIS**\n\n"
+    # Start with the header - changed from EMAIL CHANGE ANALYSIS to ACCOUNT ANALYSIS
+    output = "**📊 ACCOUNT ANALYSIS**\n\n"
     
-    # Information Source
-    if source_file:
-        output += f"**Information extracted from:** {source_file}\n\n"
-    
-    # Current Account Status from API
+    # First show current account status from API (moved to top)
     if info.get('account_status'):
         status_data = info['account_status']
         
@@ -827,6 +856,9 @@ async def send_pdf_analysis(ctx, info):
         # Make sure we always show status even if API check failed
         output += "**⚠️ ACCOUNT STATUS UNKNOWN**\n"
         output += "Could not check current account status.\n\n"
+    
+    # Now show the PDF information (moved below current status)
+    output += "**Information extracted from:** " + source_file + "\n\n"
             
     # Display Names with count if multiple
     if info['display_names']:
@@ -860,7 +892,7 @@ async def send_pdf_analysis(ctx, info):
         output += f"**Oldest IP:** {info['oldest_ip']}\n"
     
     # Account Status
-    output += "\n**Account Status:** "
+    output += "\n**Account Status History:** "
     if info['account_disabled']:
         output += f"Disabled {info['disable_count']} time(s)"
         if info['compromised_account']:
@@ -1088,12 +1120,15 @@ async def lookup_command(ctx, value, mode=None):
             # Remove the lookup message since we'll send embeds
             await lookup_msg.delete()
             
-            if not result:
+            # Deduplicate the results to avoid showing the same account multiple times
+            unique_results = deduplicate_accounts(result)
+            
+            if not unique_results:
                 await ctx.send("❌ No results found.")
                 return
 
             # Show up to 5 matches to avoid spam
-            for acc in result[:5]:
+            for acc in unique_results[:5]:
                 display_name = acc.get("displayName", "Unknown")
                 epic_id = acc.get("id", "Unknown")
 
@@ -1118,8 +1153,8 @@ async def lookup_command(ctx, value, mode=None):
                 await ctx.send(embed=embed)
 
             # If there are more than 5, hint that more exist
-            if len(result) > 5:
-                await ctx.send(f"ℹ️ More results exist ({len(result)-5} more). Refine your search for fewer matches.")
+            if len(unique_results) > 5:
+                await ctx.send(f"ℹ️ More results exist ({len(unique_results)-5} more). Refine your search for fewer matches.")
             return
 
         # ID LOOKUP -> single account object
@@ -1376,7 +1411,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print("Current Time (UTC): 2025-09-01 11:36:00")
+    print("Current Time (UTC): 2025-09-01 11:47:49")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
