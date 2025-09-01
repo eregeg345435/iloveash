@@ -4,7 +4,7 @@
 Advanced Discord Bot with PDF Processing
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-01 11:47:49
+Last updated: 2025-09-01 11:56:17
 """
 
 import os
@@ -52,7 +52,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-01 11:47:49"
+LAST_UPDATED = "2025-09-01 11:56:17"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -124,6 +124,10 @@ DELETE_MESSAGES = True
 
 # Delay before message deletion (in seconds)
 MESSAGE_DELETE_DELAY = 1  # Reduced to 1 second for faster response
+
+# Track messages sent to avoid duplication
+message_cache = set()
+
 # -------------------
 
 # Set up Discord bot with intents
@@ -278,28 +282,30 @@ def epic_lookup(value, mode=None):
     return get_api_response(url)
 
 
-def detect_platform_from_transactions(transactions):
+def detect_platform_from_transactions(text):
     """
-    Detect platform (XBL, PSN, PC) from transaction data
+    Detect platform (XBL, PSN, PC) from transaction data or text
     Returns platform code and display name.
     """
-    # Look for platform-specific patterns in transactions
-    for transaction in transactions:
-        # Get transaction type and details
-        transaction_type = transaction.get('type', '')
-        details = transaction.get('details', '').lower()
-        
-        # Check for XBL (Xbox Live)
-        if 'xbl_xtoken' in details or 'xbox' in details:
-            return 'Xbox (XBL)', 'xbl_xtoken'
-            
-        # Check for PSN (PlayStation Network)
-        if 'psn_xtoken' in details or 'playstation' in details or 'psn' in details:
-            return 'PlayStation (PSN)', 'psn_xtoken'
-            
-        # Check for PC/Epic
-        if 'epic' in details or 'pc' in details:
-            return 'PC/Epic Games', 'epic'
+    # Priority check for specific platform tokens
+    if 'xbl_xtoken' in text.lower():
+        return 'Xbox (XBL)', 'xbl_xtoken'
+    elif 'psn_xtoken' in text.lower():
+        return 'PlayStation (PSN)', 'psn_xtoken'
+    elif 'nintendo' in text.lower():
+        return 'Nintendo Switch', 'nintendo'
+    
+    # Secondary checks for platform names
+    if any(term in text.lower() for term in ["xbox", "xbl", "xb1", "xsx"]):
+        return 'Xbox (XBL)', 'xbl_xtoken'
+    elif any(term in text.lower() for term in ["playstation", "psn", "ps4", "ps5"]):
+        return 'PlayStation (PSN)', 'psn_xtoken'
+    elif any(term in text.lower() for term in ["pc", "epic", "computer", "windows"]):
+        return 'PC/Epic Games', 'epic'
+    elif any(term in text.lower() for term in ["nintendo", "switch"]):
+        return 'Nintendo Switch', 'nintendo'
+    elif any(term in text.lower() for term in ["mobile", "ios", "android", "phone"]):
+        return 'Mobile (iOS/Android)', 'mobile'
     
     # Default to unknown if no specific platform found
     return 'Unknown', ''
@@ -488,49 +494,43 @@ def extract_user_info_from_text(text):
             info['creation_date'] = date_match.group(1)
             break
 
-    # Look for platform info (format from image 7) - but we'll check transactions later
-    platform_match = re.search(r'Platform:?\s*([^\n]+)', text, re.IGNORECASE)
-    if platform_match:
-        platform_text = platform_match.group(1).strip().lower()
-        # First check for exact matches to ensure platform is detected correctly
-        if platform_text == "playstation (psn)" or platform_text == "playstation" or platform_text == "psn" or platform_text == "playstation network":
-            info['platform'] = 'PlayStation (PSN)'
-            info['platform_token'] = 'psn_xtoken'
-        elif platform_text == "xbox (xbl)" or platform_text == "xbox" or platform_text == "xbl" or platform_text == "xbox live":
-            info['platform'] = 'Xbox (XBL)'
-            info['platform_token'] = 'xbl_xtoken'
-        elif platform_text == "pc/epic games" or platform_text == "pc" or platform_text == "epic games" or platform_text == "epic":
-            info['platform'] = 'PC/Epic Games'
-            info['platform_token'] = 'epic'
-        elif platform_text == "nintendo switch" or platform_text == "switch" or platform_text == "nintendo":
-            info['platform'] = 'Nintendo Switch'
-            info['platform_token'] = 'nintendo'
-        elif platform_text == "mobile (ios/android)" or platform_text == "mobile" or platform_text == "ios" or platform_text == "android":
-            info['platform'] = 'Mobile (iOS/Android)'
-            info['platform_token'] = 'mobile'
-        elif platform_text == "1":  # Special case from Image 8
-            info['platform'] = 'PlayStation (PSN)'
-            info['platform_token'] = 'psn_xtoken'
-        else:
-            # Fallback to checking for partial matches
-            if any(term in platform_text for term in ["playstation", "psn", "ps4", "ps5"]):
-                info['platform'] = 'PlayStation (PSN)'
-                info['platform_token'] = 'psn_xtoken'
-            elif any(term in platform_text for term in ["xbox", "xbl", "xb1", "xsx"]):
-                info['platform'] = 'Xbox (XBL)'
-                info['platform_token'] = 'xbl_xtoken'
-            elif any(term in platform_text for term in ["pc", "epic", "computer", "windows"]):
-                info['platform'] = 'PC/Epic Games'
-                info['platform_token'] = 'epic'
-            elif any(term in platform_text for term in ["nintendo", "switch"]):
-                info['platform'] = 'Nintendo Switch'
-                info['platform_token'] = 'nintendo'
-            elif any(term in platform_text for term in ["mobile", "ios", "android", "phone"]):
-                info['platform'] = 'Mobile (iOS/Android)'
-                info['platform_token'] = 'mobile'
-            else:
-                # If no platform was detected, just store the original text
-                info['platform'] = platform_match.group(1).strip()
+    # Look for external auth tokens and platform info
+    auth_patterns = [
+        r'addedExternalAuth[:\s]+([^\s\n]+)',  # addedExternalAuth: xbl_xtoken
+        r'externalAuth[:\s]+([^\s\n]+)',       # externalAuth: psn_xtoken
+        r'platform[:\s]+([^\n]+)',             # Platform: PlayStation (PSN)
+        r'\b(psn_xtoken|xbl_xtoken|epic)\b'    # Direct token mentions
+    ]
+    
+    # First, collect all possible platform mentions in the text
+    platform_mentions = []
+    for pattern in auth_patterns:
+        matches = re.finditer(pattern, text, re.IGNORECASE)
+        for match in matches:
+            token = match.group(1).strip().lower()
+            platform_mentions.append(token)
+    
+    # Determine the platform from collected mentions
+    if any('xbl_xtoken' in mention for mention in platform_mentions):
+        info['platform'] = 'Xbox (XBL)'
+        info['platform_token'] = 'xbl_xtoken'
+    elif any('psn_xtoken' in mention for mention in platform_mentions):
+        info['platform'] = 'PlayStation (PSN)'
+        info['platform_token'] = 'psn_xtoken'
+    elif any('nintendo' in mention for mention in platform_mentions):
+        info['platform'] = 'Nintendo Switch'
+        info['platform_token'] = 'nintendo'
+    elif any('epic' in mention or 'pc' in mention for mention in platform_mentions):
+        info['platform'] = 'PC/Epic Games'
+        info['platform_token'] = 'epic'
+    else:
+        # Fallback to platform field detection if no tokens found
+        platform_match = re.search(r'Platform:?\s*([^\n]+)', text, re.IGNORECASE)
+        if platform_match:
+            platform_text = platform_match.group(1).strip().lower()
+            platform, token = detect_platform_from_transactions(platform_text)
+            info['platform'] = platform
+            info['platform_token'] = token
 
     # Look for IP addresses with dates
     ip_patterns = [
@@ -618,8 +618,9 @@ def extract_user_info_from_text(text):
             if 'METADATA_ADD' in transaction_type and 'DISABLED_REASON' in details and 'Compromised' in details:
                 info['compromised_account'] = True
                 
-            # Check for platform tokens
-            if 'addedexternalauth' in transaction_type.lower():
+            # Check for platform tokens - highest priority
+            if ('addedexternalauth' in transaction_type.lower() or 
+                'externalauth' in transaction_type.lower()):
                 if 'xbl_xtoken' in details.lower():
                     info['platform'] = 'Xbox (XBL)'
                     info['platform_token'] = 'xbl_xtoken'
@@ -639,10 +640,10 @@ def extract_user_info_from_text(text):
                 'details': details
             })
 
-    # If we have transactions but no platform yet, try to detect from transactions
-    if info['transactions'] and not info['platform_token']:
-        platform, token = detect_platform_from_transactions(info['transactions'])
-        if token:  # Only update if we found something
+    # If we still don't have a platform, use the full text as a fallback
+    if not info['platform'] or info['platform'] == 'Unknown':
+        platform, token = detect_platform_from_transactions(text)
+        if platform != 'Unknown':  # Only update if we found something
             info['platform'] = platform
             info['platform_token'] = token
 
@@ -881,11 +882,10 @@ async def send_pdf_analysis(ctx, info):
     
     # Platform - now includes platform token if available
     if info['platform']:
-        platform_text = info['platform']
-        # Add platform token if available
         if info['platform_token']:
-            platform_text += f" [{info['platform_token']}]"
-        output += f"**Platform:** {platform_text}\n"
+            output += f"**Platform:** {info['platform']} [{info['platform_token']}]\n"
+        else:
+            output += f"**Platform:** {info['platform']}\n"
     
     # Oldest IP
     if info['oldest_ip']:
@@ -1234,17 +1234,33 @@ async def test_proxies_command(ctx):
     working_count = 0
     total_proxies = len(PROXIES)
     
-    # Progress updates
+    # Progress updates - using a single message
     progress_msg = await ctx.send(f"Progress: 0/{total_proxies} tested")
     working_list = []
     
+    # Remember the content we've already sent to avoid duplication
+    processed_counts = set()
+    
     for i, proxy in enumerate(PROXIES):
-        if (i+1) % 5 == 0 or i+1 == total_proxies:
-            await progress_msg.edit(content=f"Progress: {i+1}/{total_proxies} tested, {working_count} working")
-            
-        if test_proxy(proxy):
-            working_count += 1
-            working_list.append(proxy)
+        progress = i + 1
+        status = f"Progress: {progress}/{total_proxies} tested"
+        
+        # Only update at specific points to avoid rate limits
+        if progress % 5 == 0 or progress == total_proxies:
+            if test_proxy(proxy):
+                working_count += 1
+                working_list.append(proxy)
+                
+            # Only update if we haven't sent this exact progress before
+            update_text = f"Progress: {progress}/{total_proxies} tested, {working_count} working"
+            if update_text not in processed_counts:
+                processed_counts.add(update_text)
+                await progress_msg.edit(content=update_text)
+        else:
+            # Test without updating message
+            if test_proxy(proxy):
+                working_count += 1
+                working_list.append(proxy)
     
     # Send final results
     await ctx.send(f"✅ Found {working_count} working proxies out of {total_proxies}")
@@ -1411,7 +1427,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print("Current Time (UTC): 2025-09-01 11:47:49")
+    print("Current Time (UTC): 2025-09-01 11:56:17")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
