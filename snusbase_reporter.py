@@ -4,7 +4,7 @@
 Advanced Discord Bot with PDF Processing
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-01 08:45:14
+Last updated: 2025-09-01 09:48:32
 """
 
 import os
@@ -50,11 +50,26 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-01 08:45:14"
+LAST_UPDATED = "2025-09-01 09:48:32"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
 API_BASE = "https://api.proswapper.xyz/external"
+_HEX32 = re.compile(r"^[0-9a-fA-F]{32}$")
+
+# Use browser-like headers (important: default python-requests often gets 403)
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0 Safari/537.36"
+    ),
+    "Accept": "application/json,text/plain,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://proswapper.xyz/",
+    "Origin": "https://proswapper.xyz",
+    "Connection": "keep-alive",
+}
 
 # Default to 0 - will be set by the user with the setup command
 NAMES_CHANNEL_ID = 0  # Channel for user submissions
@@ -94,18 +109,25 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 processing_lock = asyncio.Lock()
 
 
-def epic_lookup(value, mode="name"):
+def epic_lookup(value, mode=None, timeout=12.0):
     """
     Look up Epic account info by display name or account ID.
 
-    mode: "name" or "id"
-    value: the display name (string) or the 32-char account ID
+    - value: display name OR 32-char account ID
+    - mode: "name" or "id" (auto-detected if None)
     """
-    if mode not in {"name", "id"}:
-        raise ValueError("mode must be 'name' or 'id'")
+    value = (value or "").strip()
+    if not value:
+        raise ValueError("Please provide a display name or account ID")
+
+    if mode is None:
+        mode = "id" if _HEX32.match(value) else "name"
+    elif mode not in {"name", "id"}:
+        raise ValueError("mode must be 'name', 'id', or None")
+
     url = f"{API_BASE}/{mode}/{value}"
     try:
-        resp = requests.get(url, timeout=12)
+        resp = requests.get(url, headers=HEADERS, timeout=timeout)
         resp.raise_for_status()
         return resp.json()
     except requests.exceptions.HTTPError as e:
@@ -717,7 +739,7 @@ async def process_pdf_command(ctx, password=None):
 
 
 @bot.command(name='lookup')
-async def lookup_command(ctx, value, mode="name"):
+async def lookup_command(ctx, value, mode=None):
     """Look up an Epic account by display name or account ID"""
     # Check premium access
     if not await check_premium_access(ctx):
@@ -727,8 +749,12 @@ async def lookup_command(ctx, value, mode="name"):
         await ctx.send("Please provide a display name or account ID to look up.")
         return
         
-    if mode not in ["name", "id"]:
-        mode = "name"
+    # Auto-detect mode if not provided
+    if mode is None:
+        mode = "id" if _HEX32.match(value) else "name"
+    elif mode not in ["name", "id"]:
+        await ctx.send("Mode must be 'name' or 'id'. Using auto-detection instead.")
+        mode = "id" if _HEX32.match(value) else "name"
     
     await ctx.send(f"🔍 Looking up Epic account by {mode}: `{value}`...")
     
@@ -820,7 +846,7 @@ async def custom_commands_help(ctx):
     if ctx.author.id in authorized_users:
         embed.add_field(name="!lookup [value] [mode]",
                         value="Look up an Epic Games account by name or ID\n"
-                              "mode can be 'name' or 'id' (default: name)",
+                              "mode can be 'name' or 'id' (default: auto-detect)",
                         inline=False)
                     
         embed.add_field(name="!setup #channel1 #channel2 #channel3",
@@ -888,7 +914,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print("Current Time (UTC): 2025-09-01 08:45:14")
+    print("Current Time (UTC): 2025-09-01 09:48:32")
     print("Use Ctrl+C to stop")
     
     try:
