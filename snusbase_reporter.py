@@ -4,7 +4,7 @@
 Advanced Discord Bot with PDF Processing
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-01 11:24:15
+Last updated: 2025-09-01 11:36:00
 """
 
 import os
@@ -52,8 +52,8 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-01 11:24:15"
-BOT_USER = "eregeg34543545"
+LAST_UPDATED = "2025-09-01 11:36:00"
+BOT_USER = "eregeg345435"
 
 # Epic API base URL
 API_BASE = "https://api.proswapper.xyz/external"
@@ -118,7 +118,7 @@ except Exception as e:
 DELETE_MESSAGES = True
 
 # Delay before message deletion (in seconds)
-MESSAGE_DELETE_DELAY = 2
+MESSAGE_DELETE_DELAY = 1  # Reduced to 1 second for faster response
 # -------------------
 
 # Set up Discord bot with intents
@@ -128,6 +128,21 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Processing lock to prevent multiple concurrent processes
 processing_lock = asyncio.Lock()
+
+
+def test_proxy(proxy, timeout=3):
+    """Test if a proxy works with the API"""
+    proxy_dict = {
+        'http': f'http://{proxy}',
+        'https': f'http://{proxy}'
+    }
+    
+    try:
+        response = requests.get("https://api.proswapper.xyz/external/name/test", 
+                               proxies=proxy_dict, timeout=timeout, headers=HEADERS)
+        return response.status_code == 200
+    except:
+        return False
 
 
 def find_working_proxy(force_check=False):
@@ -146,57 +161,25 @@ def find_working_proxy(force_check=False):
         if not force_check and current_proxy and (current_time - proxy_last_checked) < proxy_check_interval:
             return current_proxy
         
-        # Shuffle proxies to avoid always testing them in the same order
+        # Test the current proxy first if we have one
+        if current_proxy:
+            if test_proxy(current_proxy):
+                logger.info(f"Current proxy still working: {current_proxy}")
+                proxy_last_checked = current_time
+                return current_proxy
+            else:
+                logger.info(f"Current proxy no longer working: {current_proxy}")
+        
+        # Try each proxy in random order
         shuffled_proxies = PROXIES.copy()
         random.shuffle(shuffled_proxies)
         
-        # Test URL - using a known endpoint that should return quickly
-        test_url = "https://api.proswapper.xyz/external/name/test"
-        
-        # First, test the current proxy if we have one
-        if current_proxy and current_proxy in shuffled_proxies:
-            proxy_dict = {
-                'http': f'http://{current_proxy}',
-                'https': f'http://{current_proxy}'
-            }
-            
-            try:
-                # Set a short timeout for quick testing
-                response = requests.get(test_url, proxies=proxy_dict, timeout=3, headers=HEADERS)
-                
-                # If we get a successful response, keep using this proxy
-                if response.status_code == 200:
-                    logger.info(f"Current proxy still working: {current_proxy}")
-                    proxy_last_checked = current_time
-                    return current_proxy
-            except:
-                # If current proxy fails, continue to testing others
-                logger.info(f"Current proxy no longer working: {current_proxy}")
-                pass
-        
-        # Test all other proxies
         for proxy in shuffled_proxies:
-            if proxy == current_proxy:  # Skip the one we just tested
-                continue
-                
-            proxy_dict = {
-                'http': f'http://{proxy}',
-                'https': f'http://{proxy}'
-            }
-            
-            try:
-                # Set a short timeout for quick testing
-                response = requests.get(test_url, proxies=proxy_dict, timeout=3, headers=HEADERS)
-                
-                # If we get a successful response, use this proxy
-                if response.status_code == 200:
-                    logger.info(f"Found new working proxy: {proxy}")
-                    current_proxy = proxy
-                    proxy_last_checked = current_time
-                    return proxy
-            except:
-                # If connection fails, try the next proxy
-                continue
+            if test_proxy(proxy):
+                logger.info(f"Found working proxy: {proxy}")
+                current_proxy = proxy
+                proxy_last_checked = current_time
+                return proxy
         
         # If no proxy works, reset current proxy and return None
         logger.warning("No working proxy found")
@@ -204,10 +187,78 @@ def find_working_proxy(force_check=False):
         return None
 
 
-def epic_lookup(value, mode=None, timeout=12.0):
+def get_api_response(url, timeout=8.0):
+    """
+    Make an API request using the current proxy or try to find a working proxy.
+    Returns the API response or an error dict.
+    """
+    global current_proxy
+    
+    # Make sure we have a working proxy
+    if not current_proxy:
+        current_proxy = find_working_proxy()
+    
+    if current_proxy:
+        # Try with current proxy
+        proxy_dict = {
+            'http': f'http://{current_proxy}',
+            'https': f'http://{current_proxy}'
+        }
+        
+        try:
+            resp = requests.get(url, headers=HEADERS, proxies=proxy_dict, timeout=timeout)
+            if resp.status_code == 200:
+                return resp.json()
+            elif resp.status_code == 404:
+                return {"status": "INACTIVE", "message": "Account not found or inactive"}
+            elif resp.status_code == 403:
+                # Proxy might be getting blocked, try to find a new one
+                threading.Thread(target=lambda: find_working_proxy(force_check=True)).start()
+        except:
+            # If proxy fails, try to find a new one
+            threading.Thread(target=lambda: find_working_proxy(force_check=True)).start()
+    
+    # Try all other proxies
+    for proxy in PROXIES:
+        if proxy == current_proxy:
+            continue
+            
+        proxy_dict = {
+            'http': f'http://{proxy}',
+            'https': f'http://{proxy}'
+        }
+        
+        try:
+            resp = requests.get(url, headers=HEADERS, proxies=proxy_dict, timeout=timeout)
+            if resp.status_code == 200:
+                # Found a working proxy, update global
+                current_proxy = proxy
+                proxy_last_checked = time.time()
+                return resp.json()
+            elif resp.status_code == 404:
+                return {"status": "INACTIVE", "message": "Account not found or inactive"}
+        except:
+            continue
+    
+    # If all proxies fail, try direct connection as last resort
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=timeout)
+        if resp.status_code == 200:
+            return resp.json()
+        elif resp.status_code == 404:
+            return {"status": "INACTIVE", "message": "Account not found or inactive"}
+        elif resp.status_code == 403:
+            return {"status": "ERROR", "message": "API access denied"}
+        else:
+            return {"status": "ERROR", "message": f"HTTP error: {resp.status_code}"}
+    except Exception as e:
+        return {"status": "ERROR", "message": f"Error: {str(e)}"}
+
+
+def epic_lookup(value, mode=None):
     """
     Look up Epic account info by display name or account ID.
-    Uses the current working proxy.
+    Uses a working proxy if available.
     """
     value = (value or "").strip()
     if not value:
@@ -219,49 +270,34 @@ def epic_lookup(value, mode=None, timeout=12.0):
         return {"status": "ERROR", "message": "mode must be 'name', 'id', or None"}
 
     url = f"{API_BASE}/{mode}/{value}"
-    
-    # Get the current working proxy (find a new one if needed)
-    proxy = find_working_proxy()
-    
-    if proxy:
-        # We have a working proxy, use it
-        proxy_dict = {
-            'http': f'http://{proxy}',
-            'https': f'http://{proxy}'
-        }
+    return get_api_response(url)
+
+
+def detect_platform_from_transactions(transactions):
+    """
+    Detect platform (XBL, PSN, PC) from transaction data
+    Returns platform code and display name.
+    """
+    # Look for platform-specific patterns in transactions
+    for transaction in transactions:
+        # Get transaction type and details
+        transaction_type = transaction.get('type', '')
+        details = transaction.get('details', '').lower()
         
-        try:
-            resp = requests.get(url, headers=HEADERS, proxies=proxy_dict, timeout=timeout)
-            if resp.status_code == 404:
-                return {"status": "INACTIVE", "message": "Account not found or inactive"}
-            if resp.status_code == 403:
-                # Force find a new proxy for next time since this one might be getting blocked
-                threading.Thread(target=lambda: find_working_proxy(force_check=True)).start()
-                # But still return the error for this attempt
-                return {"status": "FORBIDDEN", "message": "403 Forbidden — API access denied"}
-            resp.raise_for_status()
-            return resp.json()
-        except requests.exceptions.RequestException:
-            # If proxy fails for this specific request, force finding a new one next time
-            threading.Thread(target=lambda: find_working_proxy(force_check=True)).start()
-        except Exception as e:
-            logger.error(f"Error with proxy request: {e}")
+        # Check for XBL (Xbox Live)
+        if 'xbl_xtoken' in details or 'xbox' in details:
+            return 'Xbox (XBL)', 'xbl_xtoken'
+            
+        # Check for PSN (PlayStation Network)
+        if 'psn_xtoken' in details or 'playstation' in details or 'psn' in details:
+            return 'PlayStation (PSN)', 'psn_xtoken'
+            
+        # Check for PC/Epic
+        if 'epic' in details or 'pc' in details:
+            return 'PC/Epic Games', 'epic'
     
-    # If we don't have a proxy or it failed, try direct connection as last resort
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=timeout)
-        if resp.status_code == 404:
-            return {"status": "INACTIVE", "message": "Account not found or inactive"}
-        if resp.status_code == 403:
-            return {"status": "FORBIDDEN", "message": "403 Forbidden — API access denied"}
-        resp.raise_for_status()
-        return resp.json()
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"HTTP error in epic_lookup: {e}")
-        return {"status": "ERROR", "message": f"HTTP error: {e}"}
-    except Exception as e:
-        logger.error(f"Error in epic_lookup: {e}")
-        return {"status": "ERROR", "message": f"Error: {e}"}
+    # Default to unknown if no specific platform found
+    return 'Unknown', ''
 
 
 async def check_account_status(account_id):
@@ -331,6 +367,7 @@ def extract_user_info_from_text(text):
         'oldest_ip': None,
         'oldest_ip_date': None,
         'platform': None,
+        'platform_token': None,
         'account_disabled': False,
         'disable_count': 0,
         'disable_dates': [],
@@ -421,35 +458,46 @@ def extract_user_info_from_text(text):
             info['creation_date'] = date_match.group(1)
             break
 
-    # Look for platform info (format from image 7)
+    # Look for platform info (format from image 7) - but we'll check transactions later
     platform_match = re.search(r'Platform:?\s*([^\n]+)', text, re.IGNORECASE)
     if platform_match:
         platform_text = platform_match.group(1).strip().lower()
         # First check for exact matches to ensure platform is detected correctly
         if platform_text == "playstation (psn)" or platform_text == "playstation" or platform_text == "psn" or platform_text == "playstation network":
             info['platform'] = 'PlayStation (PSN)'
+            info['platform_token'] = 'psn_xtoken'
         elif platform_text == "xbox (xbl)" or platform_text == "xbox" or platform_text == "xbl" or platform_text == "xbox live":
             info['platform'] = 'Xbox (XBL)'
+            info['platform_token'] = 'xbl_xtoken'
         elif platform_text == "pc/epic games" or platform_text == "pc" or platform_text == "epic games" or platform_text == "epic":
             info['platform'] = 'PC/Epic Games'
+            info['platform_token'] = 'epic'
         elif platform_text == "nintendo switch" or platform_text == "switch" or platform_text == "nintendo":
             info['platform'] = 'Nintendo Switch'
+            info['platform_token'] = 'nintendo'
         elif platform_text == "mobile (ios/android)" or platform_text == "mobile" or platform_text == "ios" or platform_text == "android":
             info['platform'] = 'Mobile (iOS/Android)'
+            info['platform_token'] = 'mobile'
         elif platform_text == "1":  # Special case from Image 8
             info['platform'] = 'PlayStation (PSN)'
+            info['platform_token'] = 'psn_xtoken'
         else:
             # Fallback to checking for partial matches
             if any(term in platform_text for term in ["playstation", "psn", "ps4", "ps5"]):
                 info['platform'] = 'PlayStation (PSN)'
+                info['platform_token'] = 'psn_xtoken'
             elif any(term in platform_text for term in ["xbox", "xbl", "xb1", "xsx"]):
                 info['platform'] = 'Xbox (XBL)'
+                info['platform_token'] = 'xbl_xtoken'
             elif any(term in platform_text for term in ["pc", "epic", "computer", "windows"]):
                 info['platform'] = 'PC/Epic Games'
+                info['platform_token'] = 'epic'
             elif any(term in platform_text for term in ["nintendo", "switch"]):
                 info['platform'] = 'Nintendo Switch'
+                info['platform_token'] = 'nintendo'
             elif any(term in platform_text for term in ["mobile", "ios", "android", "phone"]):
                 info['platform'] = 'Mobile (iOS/Android)'
+                info['platform_token'] = 'mobile'
             else:
                 # If no platform was detected, just store the original text
                 info['platform'] = platform_match.group(1).strip()
@@ -492,33 +540,81 @@ def extract_user_info_from_text(text):
             info['account_disabled'] = False
 
     # Look for transactions (HISTORY_ACCOUNT entries) to determine if account was disabled/compromised
-    transaction_matches = re.finditer(r'HISTORY_ACCOUNT_([A-Z_]+)\s+(\d{1,2}/\d{1,2}/\d{2,4})\s+(.+?)(?=\n|$)', text)
-    for match in transaction_matches:
-        transaction_type = match.group(1)
-        date = match.group(2)
-        details = match.group(3).strip()
+    transaction_patterns = [
+        # Standard format with HISTORY_ACCOUNT_ prefix
+        r'HISTORY_ACCOUNT_([A-Z_]+)\s+(\d{1,2}/\d{1,2}/\d{2,4})\s+(.+?)(?=\n|$)',
+        
+        # Looking specifically for addedExternalAuth entries (like in image 4)
+        r'(\d{1,2}/\d{1,2}/\d{4})\s+(addedExternalAuth)\s*:\s*([^\n]+)',
+        
+        # Any date followed by action that might be relevant
+        r'(\d{1,2}/\d{1,2}/\d{2,4})\s+([^\s:]+)(?:\s*:\s*|\s+)([^\n]+)'
+    ]
+    
+    for pattern in transaction_patterns:
+        matches = re.finditer(pattern, text, re.IGNORECASE)
+        for match in matches:
+            # Handle different formats
+            if len(match.groups()) == 3:
+                if match.group(1).lower() in ['addedexternalauth']:
+                    # Format: date action details
+                    transaction_type = match.group(1).upper()
+                    date = match.group(2)
+                    details = match.group(3).strip()
+                else:
+                    # Format: HISTORY_ACCOUNT_TYPE date details
+                    transaction_type = match.group(1)
+                    date = match.group(2)
+                    details = match.group(3).strip()
+            else:
+                # Fallback format
+                transaction_type = match.group(2).upper()
+                date = match.group(1)
+                details = match.group(3).strip()
+                
+            # Track account disable/reactivate events
+            if 'DISABLE' in transaction_type:
+                info['account_disabled'] = True
+                info['disable_count'] += 1
+                info['disable_dates'].append(date)
+                if 'meta data' in details.lower():
+                    info['deactivated'] = True
 
-        # Track account disable/reactivate events
-        if 'DISABLE' in transaction_type:
-            info['account_disabled'] = True
-            info['disable_count'] += 1
-            info['disable_dates'].append(date)
-            if 'meta data' in details.lower():
-                info['deactivated'] = True
+            if 'REACTIVE' in transaction_type or 'REENABLE' in transaction_type or 'ENABLED' in transaction_type:
+                info['reactivated'] = True
+                info['reactivate_dates'].append(date)
 
-        if 'REACTIVE' in transaction_type or 'REENABLE' in transaction_type or 'ENABLED' in transaction_type:
-            info['reactivated'] = True
-            info['reactivate_dates'].append(date)
+            # Check for compromised account pattern
+            if 'METADATA_ADD' in transaction_type and 'DISABLED_REASON' in details and 'Compromised' in details:
+                info['compromised_account'] = True
+                
+            # Check for platform tokens
+            if 'addedexternalauth' in transaction_type.lower():
+                if 'xbl_xtoken' in details.lower():
+                    info['platform'] = 'Xbox (XBL)'
+                    info['platform_token'] = 'xbl_xtoken'
+                elif 'psn_xtoken' in details.lower():
+                    info['platform'] = 'PlayStation (PSN)'
+                    info['platform_token'] = 'psn_xtoken'
+                elif 'nintendo' in details.lower():
+                    info['platform'] = 'Nintendo Switch'
+                    info['platform_token'] = 'nintendo'
+                elif any(t in details.lower() for t in ['pc', 'epic']):
+                    info['platform'] = 'PC/Epic Games'
+                    info['platform_token'] = 'epic'
 
-        # Check for compromised account pattern
-        if 'METADATA_ADD' in transaction_type and 'DISABLED_REASON' in details and 'Compromised' in details:
-            info['compromised_account'] = True
+            info['transactions'].append({
+                'type': transaction_type,
+                'date': date,
+                'details': details
+            })
 
-        info['transactions'].append({
-            'type': transaction_type,
-            'date': date,
-            'details': details
-        })
+    # If we have transactions but no platform yet, try to detect from transactions
+    if info['transactions'] and not info['platform_token']:
+        platform, token = detect_platform_from_transactions(info['transactions'])
+        if token:  # Only update if we found something
+            info['platform'] = platform
+            info['platform_token'] = token
 
     return info
 
@@ -727,6 +823,10 @@ async def send_pdf_analysis(ctx, info):
             output += "**⚠️ INVALID ACCOUNT ID FORMAT**\n"
             if 'message' in status_data:
                 output += f"{status_data['message']}\n\n"
+    else:
+        # Make sure we always show status even if API check failed
+        output += "**⚠️ ACCOUNT STATUS UNKNOWN**\n"
+        output += "Could not check current account status.\n\n"
             
     # Display Names with count if multiple
     if info['display_names']:
@@ -747,9 +847,13 @@ async def send_pdf_analysis(ctx, info):
     if info['creation_date']:
         output += f"**Creation Date:** {info['creation_date']}\n"
     
-    # Platform - using exact format from Image 8
+    # Platform - now includes platform token if available
     if info['platform']:
-        output += f"**Platform:** {info['platform']}\n"
+        platform_text = info['platform']
+        # Add platform token if available
+        if info['platform_token']:
+            platform_text += f" [{info['platform_token']}]"
+        output += f"**Platform:** {platform_text}\n"
     
     # Oldest IP
     if info['oldest_ip']:
@@ -811,13 +915,18 @@ async def on_ready():
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
     print(f"Current Time (UTC): {LAST_UPDATED}")
-    print(f"Using {len(PROXIES)} proxies for API lookups")
     
     # Start proxy maintenance task
     bot.loop.create_task(proxy_maintenance_task())
     
     # Find a working proxy immediately so it's ready for the first command
-    threading.Thread(target=find_working_proxy).start()
+    working_proxy = find_working_proxy()
+    if working_proxy:
+        print(f"✓ Successfully connected to proxy server")
+        print(f"API connection ready")
+    else:
+        print("✗ Could not establish proxy connection")
+        print("Using direct connection mode")
     
     # Automatically authorize the first person who uses the bot
     global authorized_users
@@ -841,7 +950,15 @@ async def on_message(message):
             # Can't DM them, send in channel instead
             await message.channel.send(f"✅ {message.author.mention}, you've been automatically authorized for premium commands as the first user.")
 
-    # Process commands first
+    # Delete user lookup commands quickly (special handling)
+    if message.content.startswith('!lookup '):
+        # Try to delete message right away
+        try:
+            await message.delete()
+        except:
+            pass
+
+    # Process commands
     await bot.process_commands(message)
 
     # Process PDF attachments in the designated channel
@@ -950,25 +1067,27 @@ async def lookup_command(ctx, value, mode=None):
     if mode is None:
         mode = "id" if _HEX32.match(value) else "name"
     elif mode not in ["name", "id"]:
-        await ctx.send("Mode must be 'name' or 'id'. Using auto-detect instead.")
         mode = "id" if _HEX32.match(value) else "name"
 
-    await ctx.send(f"🔍 Looking up Epic account by {mode}: `{value}`...")
+    # Quick status message without mentioning proxy
+    lookup_msg = await ctx.send(f"🔍 Looking up Epic account by {mode}: `{value}`...")
     
+    # Make the API request
     result = await asyncio.get_event_loop().run_in_executor(
         None, lambda: epic_lookup(value, mode)
     )
 
-    # Handle explicit error dicts
+    # Handle errors without mentioning proxies
     if isinstance(result, dict) and result.get("status") in {"ERROR", "INACTIVE", "FORBIDDEN", "INVALID"}:
-        await ctx.send(f"❌ {result.get('message', 'Lookup failed')}")
-        await ctx.send("You can try the API URL directly in your browser:\n" +
-                      f"`https://api.proswapper.xyz/external/{mode}/{value}`")
+        await lookup_msg.edit(content=f"❌ {result.get('message', 'Lookup failed')}")
         return
 
     try:
         # NAME LOOKUP -> list of accounts
         if mode == "name" and isinstance(result, list):
+            # Remove the lookup message since we'll send embeds
+            await lookup_msg.delete()
+            
             if not result:
                 await ctx.send("❌ No results found.")
                 return
@@ -1000,11 +1119,14 @@ async def lookup_command(ctx, value, mode=None):
 
             # If there are more than 5, hint that more exist
             if len(result) > 5:
-                await ctx.send(f"ℹ️ More results exist ({len(result)-5} more). Refine your name for fewer matches.")
+                await ctx.send(f"ℹ️ More results exist ({len(result)-5} more). Refine your search for fewer matches.")
             return
 
         # ID LOOKUP -> single account object
         elif mode == "id" and isinstance(result, dict):
+            # Remove the lookup message since we'll send an embed
+            await lookup_msg.delete()
+            
             display_name = result.get("displayName", "Unknown")
             epic_id = result.get("id", value)  # fall back to input
 
@@ -1030,6 +1152,9 @@ async def lookup_command(ctx, value, mode=None):
             
         # NAME LOOKUP but got a single object (happens sometimes)
         elif mode == "name" and isinstance(result, dict):
+            # Remove the lookup message since we'll send an embed
+            await lookup_msg.delete()
+            
             display_name = result.get("displayName", "Unknown")
             epic_id = result.get("id", "Unknown")
 
@@ -1053,13 +1178,12 @@ async def lookup_command(ctx, value, mode=None):
             await ctx.send(embed=embed)
             return
 
-        # Fallback for unexpected response format
-        await ctx.send(f"❌ Unexpected response format: {type(result).__name__}")
-        await ctx.send(f"```\n{str(result)[:1000]}\n```")
+        # Fallback for unexpected response format (edit the lookup message)
+        await lookup_msg.edit(content=f"❌ Unexpected response format from API")
 
     except Exception as e:
         logger.error(f"Error in lookup command: {e}")
-        await ctx.send(f"❌ Error processing API response: {str(e)}")
+        await lookup_msg.edit(content=f"❌ Error processing API response")
 
 
 @bot.command(name='testproxies')
@@ -1072,7 +1196,6 @@ async def test_proxies_command(ctx):
     await ctx.send("Testing proxies... this may take a moment.")
     
     # Use a shorter timeout for this test to be faster
-    test_url = "https://api.proswapper.xyz/external/name/test"
     working_count = 0
     total_proxies = len(PROXIES)
     
@@ -1081,25 +1204,12 @@ async def test_proxies_command(ctx):
     working_list = []
     
     for i, proxy in enumerate(PROXIES):
-        if (i+1) % 10 == 0 or i+1 == total_proxies:
+        if (i+1) % 5 == 0 or i+1 == total_proxies:
             await progress_msg.edit(content=f"Progress: {i+1}/{total_proxies} tested, {working_count} working")
             
-        proxy_dict = {
-            'http': f'http://{proxy}',
-            'https': f'http://{proxy}'
-        }
-        
-        try:
-            # Short timeout since we're just testing
-            response = requests.get(test_url, proxies=proxy_dict, timeout=2, headers=HEADERS)
-            
-            # If we get any response, the proxy is working
-            if response.status_code:
-                working_count += 1
-                working_list.append(proxy)
-        except:
-            # If connection fails, skip this proxy
-            continue
+        if test_proxy(proxy):
+            working_count += 1
+            working_list.append(proxy)
     
     # Send final results
     await ctx.send(f"✅ Found {working_count} working proxies out of {total_proxies}")
@@ -1112,33 +1222,54 @@ async def test_proxies_command(ctx):
             await ctx.send("```\n" + "\n".join(batch) + "\n```")
 
 
-@bot.command(name='currentproxy')
-async def current_proxy_command(ctx):
-    """Show the currently active proxy"""
+@bot.command(name='proxyinfo')
+async def proxy_info_command(ctx):
+    """Show proxy connection status"""
     # Check premium access
     if not await check_premium_access(ctx):
         return
     
     if current_proxy:
         # Test if the current proxy is still working
-        proxy_dict = {
-            'http': f'http://{current_proxy}',
-            'https': f'http://{current_proxy}'
-        }
-        
-        try:
-            response = requests.get("https://api.proswapper.xyz/external/name/test", 
-                                   proxies=proxy_dict, timeout=3, headers=HEADERS)
-            if response.status_code == 200:
-                status = "✅ WORKING"
-            else:
-                status = f"❌ NOT WORKING (Status: {response.status_code})"
-        except:
-            status = "❌ NOT WORKING (Connection Error)"
+        if test_proxy(current_proxy):
+            status = "✅ Connected"
+        else:
+            status = "❌ Not working (will find new proxy)"
+            # Trigger a proxy check in the background
+            threading.Thread(target=lambda: find_working_proxy(force_check=True)).start()
             
-        await ctx.send(f"Current proxy: `{current_proxy}`\nStatus: {status}")
+        embed = discord.Embed(
+            title="API Connection Status",
+            description="Using proxy connection for API requests",
+            color=discord.Color.green() if status.startswith("✅") else discord.Color.red()
+        )
+        embed.add_field(name="Status", value=status, inline=False)
+        embed.add_field(name="Connection Type", value="Proxy", inline=True)
+        embed.add_field(name="Last Checked", value=f"<t:{int(proxy_last_checked)}:R>", inline=True)
+        
+        await ctx.send(embed=embed)
     else:
-        await ctx.send("No proxy is currently active. Using direct connections.")
+        # No proxy is active, try to find one now
+        working_proxy = find_working_proxy()
+        if working_proxy:
+            embed = discord.Embed(
+                title="API Connection Status",
+                description="Successfully established proxy connection",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Status", value="✅ Connected", inline=False)
+            embed.add_field(name="Connection Type", value="Proxy", inline=True)
+            embed.add_field(name="Last Checked", value=f"<t:{int(proxy_last_checked)}:R>", inline=True)
+        else:
+            embed = discord.Embed(
+                title="API Connection Status",
+                description="Using direct connection (no working proxy)",
+                color=discord.Color.red()
+            )
+            embed.add_field(name="Status", value="⚠️ No proxy available", inline=False)
+            embed.add_field(name="Connection Type", value="Direct", inline=True)
+            
+        await ctx.send(embed=embed)
 
 
 @bot.command(name='reset')
@@ -1170,13 +1301,11 @@ async def version_info(ctx):
                     value=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
                     inline=True)
     
-    # Show proxy status
+    # Show API connection status
     if current_proxy:
-        embed.add_field(name="Proxy Status", 
-                        value=f"Using proxy for API lookups\nCurrent proxy last checked: {time.strftime('%H:%M:%S', time.localtime(proxy_last_checked))} UTC", 
-                        inline=False)
+        embed.add_field(name="API Connection", value="Active (using proxy)", inline=False)
     else:
-        embed.add_field(name="Proxy Status", value="No working proxy found, using direct connections", inline=False)
+        embed.add_field(name="API Connection", value="Direct connection", inline=False)
         
     embed.set_footer(text=f"Bot is running on {os.name.upper()} platform")
     await ctx.send(embed=embed)
@@ -1201,16 +1330,15 @@ async def custom_commands_help(ctx):
     if ctx.author.id in authorized_users:
         embed.add_field(name="!lookup [value] [mode]",
                         value="Look up an Epic Games account by name or ID\n"
-                              "mode can be 'name' or 'id' (default: auto-detect)\n"
-                              "Uses proxies to avoid 403 errors",
+                              "mode can be 'name' or 'id' (default: auto-detect)",
                         inline=False)
         
         embed.add_field(name="!testproxies",
                         value="Test all proxies to see which ones are working",
                         inline=False)
                         
-        embed.add_field(name="!currentproxy",
-                        value="Show the currently active proxy and its status",
+        embed.add_field(name="!proxyinfo",
+                        value="Check the current API connection status",
                         inline=False)
                     
         embed.add_field(name="!setup #channel1 #channel2 #channel3",
@@ -1248,17 +1376,16 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print("Current Time (UTC): 2025-09-01 11:24:15")
+    print("Current Time (UTC): 2025-09-01 11:36:00")
     print("Use Ctrl+C to stop")
-    print(f"Using {len(PROXIES)} proxies for API lookups")
     
     # Find a working proxy before starting the bot
-    print("Finding working proxy...")
+    print("Testing API connection...")
     working_proxy = find_working_proxy()
     if working_proxy:
-        print(f"Found working proxy: {working_proxy}")
+        print(f"✅ API connection ready (proxy mode)")
     else:
-        print("No working proxy found. Will start without a proxy.")
+        print("⚠️ No working proxy found, will use direct connections")
     
     try:
         bot.run(BOT_TOKEN)
