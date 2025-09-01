@@ -4,7 +4,7 @@
 Advanced Discord Bot with PDF Processing
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-01 10:29:58
+Last updated: 2025-09-01 11:03:20
 """
 
 import os
@@ -16,6 +16,7 @@ import asyncio
 import io
 import tempfile
 import sys
+import random
 from typing import List, Dict, Tuple, Union, Optional
 from collections import defaultdict
 import requests
@@ -50,24 +51,171 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-01 10:29:58"
+LAST_UPDATED = "2025-09-01 11:03:20"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
 API_BASE = "https://api.proswapper.xyz/external"
 _HEX32 = re.compile(r"^[0-9a-fA-F]{32}$")
 
-# Use browser-like headers (important: default python-requests often gets 403)
+# Simple headers to avoid detection
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0 Safari/537.36"
-    ),
-    "Accept": "application/json,text/plain,*/*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Connection": "keep-alive",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
 }
+
+# List of proxies to use for API lookups
+PROXIES = [
+    "51.159.5.19:13128",
+    "14.225.3.194:3128",
+    "103.172.196.221:8080",
+    "186.215.87.194:30010",
+    "45.167.126.168:999",
+    "66.36.234.130:1339",
+    "152.53.194.55:24657",
+    "42.96.16.176:1312",
+    "38.127.172.60:24171",
+    "38.191.214.4:999",
+    "103.144.90.75:8082",
+    "39.110.235.25:13128",
+    "49.229.100.235:8080",
+    "222.59.173.105:45108",
+    "190.52.99.220:999",
+    "185.4.29.243:7887",
+    "186.96.70.57:999",
+    "103.41.250.97:8080",
+    "152.53.194.55:14691",
+    "152.53.194.55:58872",
+    "5.252.74.3:30001",
+    "27.147.129.26:5050",
+    "45.22.209.157:8888",
+    "38.194.246.34:999",
+    "116.102.106.101:10007",
+    "36.136.27.2:4999",
+    "41.223.119.156:3128",
+    "102.23.245.112:8080",
+    "171.239.232.119:10002",
+    "219.93.111.125:9412",
+    "190.93.102.136:999",
+    "102.213.248.38:8080",
+    "103.161.69.233:2698",
+    "152.53.194.46:8065",
+    "91.84.99.28:80",
+    "116.100.250.40:10028",
+    "116.100.250.40:10005",
+    "187.111.144.102:8080",
+    "213.221.43.246:8088",
+    "5.252.74.5:30003",
+    "40.71.46.210:8214",
+    "157.180.121.252:16621",
+    "222.59.173.105:45085",
+    "72.10.160.170:3949",
+    "181.78.197.235:999",
+    "13.211.233.22:36619",
+    "103.177.235.207:83",
+    "116.98.40.45:1452",
+    "45.167.126.170:999",
+    "119.148.35.38:4840",
+    "117.161.170.163:9348",
+    "222.59.173.105:45104",
+    "152.53.194.55:59837",
+    "222.59.173.105:45219",
+    "202.162.195.54:8080",
+    "222.59.173.105:45148",
+    "191.97.14.189:999",
+    "38.127.172.50:24171",
+    "38.127.172.79:24171",
+    "157.20.236.8:3128",
+    "103.156.16.45:8080",
+    "152.53.194.55:25320",
+    "115.178.49.47:8080",
+    "176.126.103.194:44214",
+    "23.237.210.82:80",
+    "38.127.172.106:24171",
+    "47.247.141.78:8080",
+    "38.127.172.252:24171",
+    "154.0.14.116:3128",
+    "77.110.114.116:8081",
+    "116.100.250.40:10012",
+    "85.133.240.75:8080",
+    "27.124.81.146:8080",
+    "186.96.50.113:999",
+    "38.52.155.166:999",
+    "171.228.184.67:5107",
+    "115.72.39.21:8080",
+    "51.159.159.73:80",
+    "41.33.142.182:8081",
+    "167.99.172.98:8118",
+    "103.158.252.196:8090",
+    "38.191.209.130:999",
+    "103.161.69.252:2698",
+    "157.180.121.252:35993",
+    "38.172.128.104:999",
+    "201.62.125.142:8080",
+    "46.16.229.254:8079",
+    "175.118.246.102:3128",
+    "200.215.248.112:999",
+    "123.200.31.210:100",
+    "61.144.152.124:9000",
+    "103.137.91.250:8080",
+    "171.228.187.56:5107",
+    "157.10.97.229:8080",
+    "209.14.98.5:8080",
+    "157.180.121.252:35519",
+    "40.172.232.213:13279",
+    "195.133.220.46:1971",
+    "115.72.42.175:10002",
+    "200.205.60.2:8080",
+    "222.127.227.102:8082",
+    "116.97.3.251:1002",
+    "38.180.2.107:3128",
+    "222.74.73.202:42055",
+    "179.96.28.58:80",
+    "201.182.242.211:999",
+    "154.62.226.126:8888",
+    "185.191.236.162:3128",
+    "171.228.185.99:5102",
+    "38.127.172.239:24171",
+    "154.236.177.105:1976",
+    "103.230.81.121:8080",
+    "77.238.103.98:8080",
+    "186.96.111.214:999",
+    "132.145.75.68:5457",
+    "188.132.221.189:8080",
+    "94.156.152.115:3128",
+    "41.33.203.238:1981",
+    "181.196.207.114:999",
+    "45.174.95.142:999",
+    "157.180.121.252:53919",
+    "1.0.170.50:8080",
+    "157.180.121.252:55503",
+    "5.252.74.6:30004",
+    "171.228.128.206:5102",
+    "64.92.82.61:8081",
+    "45.71.15.2:8080",
+    "38.172.131.64:999",
+    "171.228.187.56:5104",
+    "178.252.171.230:8080",
+    "183.88.220.245:8080",
+    "36.147.78.166:80",
+    "38.127.172.127:24171",
+    "171.227.178.16:1008",
+    "190.242.157.215:8080",
+    "45.89.53.245:3128",
+    "38.188.178.1:999",
+    "113.116.180.180:9000",
+    "171.228.191.8:5107",
+    "46.19.68.45:4555",
+    "116.100.250.40:10006",
+    "120.50.11.225:8080",
+    "27.76.166.182:10003",
+    "45.167.126.1:8080",
+    "188.132.221.8:8080",
+    "216.195.100.57:3129",
+    "103.163.24.48:10002",
+    "115.77.160.145:10001",
+    "45.123.142.146:8181"
+]
 
 # Default to 0 - will be set by the user with the setup command
 NAMES_CHANNEL_ID = 0  # Channel for user submissions
@@ -107,16 +255,42 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 processing_lock = asyncio.Lock()
 
 
-def epic_lookup(value, mode=None, timeout=12.0):
-    """
-    Look up Epic account info by display name or account ID.
+def find_working_proxy():
+    """Test proxies and find a working one"""
+    # Shuffle the proxy list to try different ones first
+    test_proxies = PROXIES.copy()
+    random.shuffle(test_proxies)
+    
+    # Test URL - using a known endpoint that should return quickly
+    test_url = "https://api.proswapper.xyz/external/name/test"
+    
+    for proxy in test_proxies:
+        proxy_dict = {
+            'http': f'http://{proxy}',
+            'https': f'http://{proxy}'
+        }
+        
+        try:
+            # Set a short timeout to quickly skip non-working proxies
+            response = requests.get(test_url, proxies=proxy_dict, timeout=3, headers=HEADERS)
+            
+            # If we get any response (even an error), the proxy is working
+            if response.status_code:
+                logger.info(f"Found working proxy: {proxy}")
+                return proxy
+        except:
+            # If connection fails, try the next proxy
+            continue
+    
+    # If no proxy works, return None
+    logger.warning("No working proxy found")
+    return None
 
-    - value: display name OR 32-char account ID
-    - mode: "name" or "id" (auto-detected if None)
-    Returns:
-      - name lookup -> list[dict]
-      - id lookup   -> dict
-      - or an error dict: {"status": "...", "message": "..."}
+
+def epic_lookup_with_proxy(value, mode=None, timeout=12.0):
+    """
+    Look up Epic account info using proxies to avoid IP blocking.
+    First tries to find a working proxy, then falls back to direct connection if needed.
     """
     value = (value or "").strip()
     if not value:
@@ -128,6 +302,33 @@ def epic_lookup(value, mode=None, timeout=12.0):
         return {"status": "ERROR", "message": "mode must be 'name', 'id', or None"}
 
     url = f"{API_BASE}/{mode}/{value}"
+    
+    # Try with proxy first
+    working_proxy = find_working_proxy()
+    if working_proxy:
+        proxy_dict = {
+            'http': f'http://{working_proxy}',
+            'https': f'http://{working_proxy}'
+        }
+        
+        try:
+            resp = requests.get(url, headers=HEADERS, proxies=proxy_dict, timeout=timeout)
+            if resp.status_code == 404:
+                return {"status": "INACTIVE", "message": "Account not found or inactive"}
+            if resp.status_code == 403:
+                logger.info("403 error with proxy, will try another approach")
+                # Don't return here, fall through to no-proxy attempt
+            else:
+                resp.raise_for_status()
+                return resp.json()
+        except requests.exceptions.RequestException:
+            # If proxy fails, we'll try without proxy
+            logger.info(f"Proxy {working_proxy} failed, trying without proxy")
+        except Exception as e:
+            logger.error(f"Error with proxy request: {e}")
+            # Continue to try without proxy
+    
+    # Try without proxy as fallback
     try:
         resp = requests.get(url, headers=HEADERS, timeout=timeout)
         if resp.status_code == 404:
@@ -144,22 +345,46 @@ def epic_lookup(value, mode=None, timeout=12.0):
         return {"status": "ERROR", "message": f"Error: {e}"}
 
 
-def direct_epic_lookup(username):
-    """Direct lookup using the raw URL seen in the screenshot"""
-    url = f"https://api.proswapper.xyz/external/name/{username}"
+def epic_lookup_direct(value, mode="name"):
+    """
+    Most direct API lookup, tries with and without proxies
+    """
+    if not value:
+        return {"error": "No lookup value provided"}
     
-    browser_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
+    # Use absolutely minimal request to avoid detection
+    url = f"https://api.proswapper.xyz/external/{mode}/{value}"
+    headers = {"User-Agent": "Mozilla/5.0"}
     
+    # First try with a working proxy
+    working_proxy = find_working_proxy()
+    if working_proxy:
+        proxy_dict = {
+            'http': f'http://{working_proxy}',
+            'https': f'http://{working_proxy}'
+        }
+        
+        try:
+            resp = requests.get(url, headers=headers, proxies=proxy_dict, timeout=5)
+            if resp.status_code == 200:
+                return resp.json()
+            # If proxy fails with non-200, we'll try without proxy
+        except:
+            # If proxy connection fails, we'll try without proxy
+            pass
+    
+    # Try without proxy as fallback
     try:
-        response = requests.get(url, headers=browser_headers, timeout=10)
-        response.raise_for_status()
-        return response.json()
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code != 200:
+            return {"error": f"API returned status code {resp.status_code}"}
+            
+        try:
+            return resp.json()
+        except:
+            return {"error": "Could not parse API response as JSON"}
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"Request failed: {str(e)}"}
 
 
 async def check_account_status(account_id):
@@ -179,7 +404,7 @@ async def check_account_status(account_id):
     try:
         result = await loop.run_in_executor(
             None, 
-            lambda: epic_lookup(account_id, mode="id")
+            lambda: epic_lookup_with_proxy(account_id, mode="id")
         )
         
         # If the account is active and result is a dict (not an error response), add status
@@ -511,9 +736,9 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
                 await ctx.send(f"⚠️ This PDF has already been searched (Account ID: {info['account_id']})")
                 return
                 
-            # Check current account status using the API
+            # Check current account status using the API with proxy
             if info['account_id']:
-                status_message = await ctx.send(f"🔍 Checking current account status for ID: `{info['account_id']}`...")
+                status_message = await ctx.send(f"🔍 Checking current account status for ID: `{info['account_id']}` (using proxy if available)...")
                 account_status = await check_account_status(info['account_id'])
                 info['account_status'] = account_status
                 await status_message.edit(content=f"✅ Account status check complete.")
@@ -587,6 +812,8 @@ async def send_pdf_analysis(ctx, info):
             # Include current display name if available
             if 'displayName' in status_data:
                 output += f"**Current Display Name:** {status_data['displayName']}\n"
+            elif 'display_name' in status_data:
+                output += f"**Current Display Name:** {status_data['display_name']}\n"
                 
             # Include links if available
             if 'links' in status_data and status_data['links']:
@@ -694,6 +921,14 @@ async def on_ready():
     print(f"Bot is ready! Logged in as {bot.user.name}")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
+    print(f"Current Time (UTC): {LAST_UPDATED}")
+    
+    # Test if any proxies work
+    working_proxy = find_working_proxy()
+    if working_proxy:
+        print(f"Found a working proxy: {working_proxy}")
+    else:
+        print("No working proxies found. Will use direct connections.")
     
     # Automatically authorize the first person who uses the bot
     global authorized_users
@@ -829,23 +1064,38 @@ async def lookup_command(ctx, value, mode=None):
         await ctx.send("Mode must be 'name' or 'id'. Using auto-detect instead.")
         mode = "id" if _HEX32.match(value) else "name"
 
-    await ctx.send(f"🔍 Looking up Epic account by {mode}: `{value}`...")
-
-    try:
-        result = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: epic_lookup(value, mode)
+    # Find a working proxy first
+    working_proxy = find_working_proxy()
+    proxy_status = f"using proxy {working_proxy}" if working_proxy else "using direct connection (no working proxy found)"
+    await ctx.send(f"🔍 Looking up Epic account by {mode}: `{value}`... ({proxy_status})")
+    
+    # Try the proxy-enabled lookup method
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, lambda: epic_lookup_with_proxy(value, mode)
+    )
+    
+    # Handle explicit error dicts
+    if isinstance(result, dict) and result.get("status") in {"ERROR", "INACTIVE", "FORBIDDEN", "INVALID"}:
+        await ctx.send(f"❌ {result.get('message', 'Lookup failed')}")
+        await ctx.send("Trying direct API URL as fallback...")
+        
+        # Try direct lookup as fallback
+        direct_result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: epic_lookup_direct(value, mode)
         )
-
-        # Handle explicit error dicts from epic_lookup
-        if isinstance(result, dict) and result.get("status") in {"ERROR", "INACTIVE", "FORBIDDEN", "INVALID"}:
-            await ctx.send(f"❌ {result.get('message', 'Lookup failed')}")
+        
+        if direct_result and not direct_result.get("error"):
+            await ctx.send("✅ Direct API lookup successful!")
+            result = direct_result
+        else:
+            await ctx.send(f"❌ Direct API lookup also failed: {direct_result.get('error', 'Unknown error')}")
+            await ctx.send("You can try the API URL directly in your browser:\n" +
+                         f"`https://api.proswapper.xyz/external/{mode}/{value}`")
             return
 
+    try:
         # NAME LOOKUP -> list of accounts
-        if mode == "name":
-            if not isinstance(result, list):
-                await ctx.send("❌ Unexpected response format from API (expected list).")
-                return
+        if mode == "name" and isinstance(result, list):
             if not result:
                 await ctx.send("❌ No results found.")
                 return
@@ -878,15 +1128,10 @@ async def lookup_command(ctx, value, mode=None):
             # If there are more than 5, hint that more exist
             if len(result) > 5:
                 await ctx.send(f"ℹ️ More results exist ({len(result)-5} more). Refine your name for fewer matches.")
-
             return
 
         # ID LOOKUP -> single account object
-        if mode == "id":
-            if not isinstance(result, dict):
-                await ctx.send("❌ Unexpected response format from API (expected object).")
-                return
-
+        elif mode == "id" and isinstance(result, dict):
             display_name = result.get("displayName", "Unknown")
             epic_id = result.get("id", value)  # fall back to input
 
@@ -909,89 +1154,85 @@ async def lookup_command(ctx, value, mode=None):
 
             await ctx.send(embed=embed)
             return
+            
+        # NAME LOOKUP but got a single object (happens sometimes)
+        elif mode == "name" and isinstance(result, dict):
+            display_name = result.get("displayName", "Unknown")
+            epic_id = result.get("id", "Unknown")
 
-        # Fallback
-        await ctx.send("❌ Unhandled mode or response format.")
+            embed = discord.Embed(
+                title=f"Epic Account (exact name match): {display_name}",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Account ID", value=epic_id, inline=False)
+
+            external = result.get("externalAuths") or {}
+            if external:
+                linked_lines = []
+                for platform, data in external.items():
+                    if isinstance(data, dict):
+                        linked_lines.append(f"{platform}: {data.get('externalDisplayName', 'N/A')}")
+                    else:
+                        linked_lines.append(f"{platform}: {str(data)}")
+                if linked_lines:
+                    embed.add_field(name="Linked Accounts", value="\n".join(linked_lines), inline=False)
+
+            await ctx.send(embed=embed)
+            return
+
+        # Fallback for unexpected response format
+        await ctx.send(f"❌ Unexpected response format: {type(result).__name__}")
+        await ctx.send(f"```\n{str(result)[:1000]}\n```")
 
     except Exception as e:
         logger.error(f"Error in lookup command: {e}")
-        await ctx.send(f"❌ Error looking up account: {str(e)}")
+        await ctx.send(f"❌ Error processing API response: {str(e)}")
 
 
-@bot.command(name='directlookup')
-async def direct_lookup_command(ctx, username):
-    """Direct lookup using the raw URL approach"""
+@bot.command(name='testproxies')
+async def test_proxies_command(ctx):
+    """Test all proxies and show which ones work"""
+    # Check premium access
     if not await check_premium_access(ctx):
         return
     
-    await ctx.send(f"🔍 Looking up Epic account by name: `{username}`... (using direct API)")
+    await ctx.send("Testing proxies... this may take a moment.")
     
-    try:
-        result = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: direct_epic_lookup(username)
-        )
+    # Test each proxy
+    working_proxies = []
+    test_url = "https://api.proswapper.xyz/external/name/test"
+    
+    for i, proxy in enumerate(PROXIES):
+        if i % 20 == 0 and i > 0:
+            await ctx.send(f"Testing proxy {i}/{len(PROXIES)}...")
+            
+        proxy_dict = {
+            'http': f'http://{proxy}',
+            'https': f'http://{proxy}'
+        }
         
-        if result and not result.get('error'):
-            if isinstance(result, list):
-                # Handle list response (multiple accounts)
-                for acc in result[:5]:  # Limit to 5 matches
-                    display_name = acc.get("displayName", "Unknown")
-                    epic_id = acc.get("id", "Unknown")
-                    
-                    embed = discord.Embed(
-                        title=f"Epic Account: {display_name}",
-                        color=discord.Color.green()
-                    )
-                    
-                    embed.add_field(name="Account ID", value=epic_id, inline=False)
-                    
-                    # Format linked accounts if present
-                    external = acc.get("externalAuths") or {}
-                    if external:
-                        linked_lines = []
-                        for platform, data in external.items():
-                            if isinstance(data, dict):
-                                linked_lines.append(f"{platform}: {data.get('externalDisplayName', 'N/A')}")
-                            else:
-                                linked_lines.append(f"{platform}: {str(data)}")
-                        if linked_lines:
-                            embed.add_field(name="Linked Accounts", value="\n".join(linked_lines), inline=False)
-                            
-                    await ctx.send(embed=embed)
-                
-                # If there are more than 5, hint that more exist
-                if len(result) > 5:
-                    await ctx.send(f"ℹ️ More results exist ({len(result)-5} more). Refine your name for fewer matches.")
-            else:
-                # Handle single account response (dict)
-                display_name = result.get("displayName", "Unknown")
-                epic_id = result.get("id", result.get("accountId", "Unknown"))
-                
-                embed = discord.Embed(
-                    title=f"Epic Account: {display_name}",
-                    color=discord.Color.green()
-                )
-                
-                embed.add_field(name="Account ID", value=epic_id, inline=False)
-                
-                # Format links/externalAuths
-                external = result.get("externalAuths") or {}
-                if external:
-                    linked_lines = []
-                    for platform, data in external.items():
-                        if isinstance(data, dict):
-                            linked_lines.append(f"{platform}: {data.get('externalDisplayName', 'N/A')}")
-                        else:
-                            linked_lines.append(f"{platform}: {str(data)}")
-                    if linked_lines:
-                        embed.add_field(name="Linked Accounts", value="\n".join(linked_lines), inline=False)
-                
-                await ctx.send(embed=embed)
-        else:
-            await ctx.send(f"❌ Error looking up account: {result.get('error', 'Unknown error')}")
-    except Exception as e:
-        logger.error(f"Error in direct lookup command: {e}")
-        await ctx.send(f"❌ Error looking up account: {str(e)}")
+        try:
+            # Set a short timeout to quickly skip non-working proxies
+            response = requests.get(test_url, proxies=proxy_dict, timeout=2, headers=HEADERS)
+            
+            # If we get any response (even an error), the proxy is working
+            if response.status_code:
+                working_proxies.append(proxy)
+        except:
+            # If connection fails, skip this proxy
+            continue
+    
+    # Report results
+    if working_proxies:
+        await ctx.send(f"✅ Found {len(working_proxies)} working proxies out of {len(PROXIES)}:")
+        
+        # Send proxies in batches to avoid message limit
+        batch_size = 20
+        for i in range(0, len(working_proxies), batch_size):
+            batch = working_proxies[i:i+batch_size]
+            await ctx.send("```\n" + "\n".join(batch) + "\n```")
+    else:
+        await ctx.send("❌ No working proxies found.")
 
 
 @bot.command(name='reset')
@@ -1022,6 +1263,14 @@ async def version_info(ctx):
     embed.add_field(name="Python Version",
                     value=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
                     inline=True)
+    
+    # Test if any proxies work
+    working_proxy = find_working_proxy()
+    if working_proxy:
+        embed.add_field(name="Proxy Status", value=f"Working proxy available: {working_proxy}", inline=False)
+    else:
+        embed.add_field(name="Proxy Status", value="No working proxies found, using direct connections", inline=False)
+        
     embed.set_footer(text=f"Bot is running on {os.name.upper()} platform")
     await ctx.send(embed=embed)
 
@@ -1045,12 +1294,12 @@ async def custom_commands_help(ctx):
     if ctx.author.id in authorized_users:
         embed.add_field(name="!lookup [value] [mode]",
                         value="Look up an Epic Games account by name or ID\n"
-                              "mode can be 'name' or 'id' (default: auto-detect)",
+                              "mode can be 'name' or 'id' (default: auto-detect)\n"
+                              "Uses proxies to avoid 403 errors",
                         inline=False)
         
-        embed.add_field(name="!directlookup [username]",
-                        value="Look up an Epic Games account by name using direct API access\n"
-                              "Use this if regular lookup fails with 403 errors",
+        embed.add_field(name="!testproxies",
+                        value="Test all proxies to see which ones are working",
                         inline=False)
                     
         embed.add_field(name="!setup #channel1 #channel2 #channel3",
@@ -1088,8 +1337,9 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print("Current Time (UTC): 2025-09-01 10:29:58")
+    print("Current Time (UTC): 2025-09-01 11:03:20")
     print("Use Ctrl+C to stop")
+    print(f"Using {len(PROXIES)} proxies for API lookups")
     
     try:
         bot.run(BOT_TOKEN)
