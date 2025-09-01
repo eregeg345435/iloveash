@@ -4,7 +4,7 @@
 Advanced Discord Bot with PDF Processing
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-01 09:56:03
+Last updated: 2025-09-01 10:19:04
 """
 
 import os
@@ -50,7 +50,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-01 09:56:03"
+LAST_UPDATED = "2025-09-01 10:19:04"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -59,19 +59,20 @@ _HEX32 = re.compile(r"^[0-9a-fA-F]{32}$")
 
 # Use browser-like headers (important: default python-requests often gets 403)
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0 Safari/537.36"
-    ),
-    "Accept": "application/json,text/plain,*/*",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://proswapper.xyz/",
     "Origin": "https://proswapper.xyz",
+    "sec-ch-ua": "\"Chromium\";v=\"122\", \"Google Chrome\";v=\"122\", \"Not:A-Brand\";v=\"99\"",
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": "\"Windows\"",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site",
     "Connection": "keep-alive",
     "Cache-Control": "no-cache",
     "Pragma": "no-cache",
-    "DNT": "1",
 }
 
 # Default to 0 - will be set by the user with the setup command
@@ -115,9 +116,7 @@ processing_lock = asyncio.Lock()
 def epic_lookup(value, mode=None, timeout=12.0):
     """
     Look up Epic account info by display name or account ID.
-
-    - value: display name OR 32-char account ID
-    - mode: "name" or "id" (auto-detected if None)
+    Uses a more browser-like request approach to avoid 403 errors.
     """
     value = (value or "").strip()
     if not value:
@@ -130,58 +129,86 @@ def epic_lookup(value, mode=None, timeout=12.0):
 
     url = f"{API_BASE}/{mode}/{value}"
     
-    # Try with different header combinations if one fails
-    error_messages = []
+    # Enhanced browser-like headers
+    browser_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://proswapper.xyz/",
+        "Origin": "https://proswapper.xyz",
+        "sec-ch-ua": "\"Chromium\";v=\"122\", \"Google Chrome\";v=\"122\", \"Not:A-Brand\";v=\"99\"",
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": "\"Windows\"",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site",
+        "Connection": "keep-alive",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
     
-    # First attempt with full headers
+    session = requests.Session()  # Use a session for better cookie handling
+    
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=timeout)
-        resp.raise_for_status()
-        return resp.json()
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            # Account not found - it's inactive
-            return {"status": "INACTIVE", "message": "Account not found or inactive"}
-        error_messages.append(f"Full headers: {str(e)}")
+        # First visit the main site to get any cookies
+        session.get("https://proswapper.xyz/", headers=browser_headers, timeout=timeout)
         
-    # Second attempt with minimal headers
-    try:
-        minimal_headers = {
-            "User-Agent": HEADERS["User-Agent"],
-            "Accept": "application/json"
-        }
-        resp = requests.get(url, headers=minimal_headers, timeout=timeout)
+        # Then make the API request
+        resp = session.get(url, headers=browser_headers, timeout=timeout)
         resp.raise_for_status()
-        return resp.json()
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            # Account not found - it's inactive
-            return {"status": "INACTIVE", "message": "Account not found or inactive"}
-        error_messages.append(f"Minimal headers: {str(e)}")
         
-    # Third attempt with no headers
-    try:
-        resp = requests.get(url, timeout=timeout)
-        resp.raise_for_status()
-        return resp.json()
+        # Parse JSON response
+        try:
+            return resp.json()
+        except json.JSONDecodeError:
+            # If we get here, we got a successful response but it's not valid JSON
+            # This could be the raw JSON string from the screenshot
+            if resp.text and resp.text.strip():
+                try:
+                    return json.loads(resp.text)
+                except:
+                    pass
+            return {"status": "ERROR", "message": "Invalid JSON response from API"}
+            
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
             # Account not found - it's inactive
             return {"status": "INACTIVE", "message": "Account not found or inactive"}
-        error_messages.append(f"No headers: {str(e)}")
-    
-    # If we get here, all attempts failed
-    all_errors = "; ".join(error_messages)
-    logger.error(f"HTTP errors in epic_lookup: {all_errors}")
-    
-    # For 403 errors, return a more user-friendly message
-    if "403" in all_errors:
-        return {
-            "status": "ERROR", 
-            "message": "API access denied (403 Forbidden). The Epic Games API may be temporarily blocking requests."
+        logger.error(f"HTTP error in epic_lookup: {e}")
+        
+        # For debugging
+        error_info = {
+            "status": "ERROR",
+            "status_code": e.response.status_code if hasattr(e, 'response') and e.response else "unknown",
+            "message": f"HTTP error: {e}"
         }
+        return error_info
+        
+    except Exception as e:
+        logger.error(f"Error in epic_lookup: {e}")
+        return {"status": "ERROR", "message": f"Error: {e}"}
+
+
+def direct_epic_lookup(username):
+    """Direct lookup using the raw URL seen in the screenshot"""
+    url = f"https://api.proswapper.xyz/external/name/{username}"
     
-    return {"status": "ERROR", "message": f"All API attempts failed: {all_errors}"}
+    browser_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://proswapper.xyz/",
+        "Origin": "https://proswapper.xyz",
+        "sec-ch-ua": "\"Chromium\";v=\"122\", \"Google Chrome\";v=\"122\", \"Not:A-Brand\";v=\"99\"",
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": "\"Windows\"",
+    }
+    
+    try:
+        response = requests.get(url, headers=browser_headers, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        return {"error": str(e)}
 
 
 async def check_account_status(account_id):
@@ -707,6 +734,10 @@ async def check_premium_access(ctx):
     return True
 
 
+# Store a reference to the original on_message event
+original_on_message = bot.event(asyncio.coroutine(lambda *args, **kwargs: None))
+
+
 @bot.event
 async def on_ready():
     """Called when the bot is ready"""
@@ -718,36 +749,47 @@ async def on_ready():
     print(f"User: {BOT_USER}")
     
     # Automatically authorize the first person who uses the bot
-    @bot.event
-    async def on_message(message):
-        if message.author == bot.user:
-            return
-            
-        if not authorized_users and not message.author.bot:
-            authorized_users.add(message.author.id)
-            try:
-                await message.author.send("✅ You've been automatically authorized for premium commands as the first user.")
-            except:
-                pass
-                
-        await bot.process_commands(message)
-        
-        # Process PDF attachments in the designated channel
-        if message.guild and message.channel.id:
-            names_channel_id, _, _ = get_channels(message.guild.id)
-            if names_channel_id and message.channel.id == names_channel_id:
-                # If there's a PDF attachment, process it automatically
-                for attachment in message.attachments:
-                    if attachment.filename.lower().endswith('.pdf'):
-                        await process_pdf(message.channel, attachment, delete_message=False)
-                        return  # Return to prevent deleting the message here
+    global authorized_users
+    if not authorized_users:
+        print("No authorized users yet. The first user to interact will be automatically authorized.")
 
-                # For non-PDF messages, delete after a delay
-                try:
-                    await asyncio.sleep(MESSAGE_DELETE_DELAY)  # Wait a moment
-                    await message.delete()
-                except Exception as e:
-                    logger.error(f"Error deleting message: {str(e)}")
+
+# Process events separately to avoid issues with the on_message event
+@bot.event
+async def on_message(message):
+    """Called when a message is sent to a channel the bot can see"""
+    # Ignore messages from the bot
+    if message.author == bot.user:
+        return
+
+    # Automatically authorize the first user who interacts with the bot
+    if not authorized_users and not message.author.bot:
+        authorized_users.add(message.author.id)
+        try:
+            await message.author.send("✅ You've been automatically authorized for premium commands as the first user.")
+        except:
+            # Can't DM them, send in channel instead
+            await message.channel.send(f"✅ {message.author.mention}, you've been automatically authorized for premium commands as the first user.")
+
+    # Process commands first
+    await bot.process_commands(message)
+
+    # Process PDF attachments in the designated channel
+    if message.guild and message.channel.id:
+        names_channel_id, _, _ = get_channels(message.guild.id)
+        if names_channel_id and message.channel.id == names_channel_id:
+            # If there's a PDF attachment, process it automatically
+            for attachment in message.attachments:
+                if attachment.filename.lower().endswith('.pdf'):
+                    await process_pdf(message.channel, attachment, delete_message=False)
+                    return  # Return to prevent deleting the message here
+
+            # For non-PDF messages, delete after a delay
+            try:
+                await asyncio.sleep(MESSAGE_DELETE_DELAY)  # Wait a moment
+                await message.delete()
+            except Exception as e:
+                logger.error(f"Error deleting message: {str(e)}")
 
 
 @bot.command(name='setup')
@@ -851,6 +893,43 @@ async def lookup_command(ctx, value, mode=None):
         if result:
             if 'status' in result and result['status'] in ['ERROR', 'INACTIVE', 'INVALID']:
                 await ctx.send(f"❌ {result.get('message', 'Unknown error')}")
+                # Try the direct lookup method as fallback
+                await ctx.send("Trying direct API lookup as fallback...")
+                direct_result = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: direct_epic_lookup(value)
+                )
+                if direct_result and not direct_result.get('error'):
+                    embed = discord.Embed(
+                        title=f"Epic Account: {direct_result.get('displayName', 'Unknown')}",
+                        color=discord.Color.green()
+                    )
+                    
+                    embed.add_field(name="Account ID", value=direct_result.get('id', 'Unknown'), inline=False)
+                    
+                    # Check for links or externalAuths
+                    if 'links' in direct_result and direct_result['links']:
+                        linked = []
+                        for platform, data in direct_result['links'].items():
+                            if isinstance(data, dict) and 'value' in data:
+                                linked.append(f"{platform}: {data['value']}")
+                            else:
+                                linked.append(f"{platform}: {data}")
+                        if linked:
+                            embed.add_field(name="Linked Accounts", value="\n".join(linked), inline=False)
+                    
+                    if 'externalAuths' in direct_result and direct_result['externalAuths']:
+                        linked = []
+                        for platform, data in direct_result['externalAuths'].items():
+                            if isinstance(data, dict) and 'externalDisplayName' in data:
+                                linked.append(f"{platform}: {data['externalDisplayName']}")
+                            else:
+                                linked.append(f"{platform}: {data}")
+                        if linked:
+                            embed.add_field(name="Linked Accounts", value="\n".join(linked), inline=False)
+                    
+                    await ctx.send("✅ Direct API lookup successful!", embed=embed)
+                else:
+                    await ctx.send("❌ Direct API lookup also failed.")
                 return
                 
             # Format the account info
@@ -859,7 +938,7 @@ async def lookup_command(ctx, value, mode=None):
                 color=discord.Color.green()
             )
             
-            embed.add_field(name="Account ID", value=result.get('accountId', 'Unknown'), inline=False)
+            embed.add_field(name="Account ID", value=result.get('accountId', result.get('id', 'Unknown')), inline=False)
             
             # Check different field names for linked accounts
             if 'externalAuths' in result and result['externalAuths']:
@@ -888,6 +967,56 @@ async def lookup_command(ctx, value, mode=None):
             await ctx.send("❌ No results found.")
     except Exception as e:
         logger.error(f"Error in lookup command: {e}")
+        await ctx.send(f"❌ Error looking up account: {str(e)}")
+
+
+@bot.command(name='directlookup')
+async def direct_lookup_command(ctx, username):
+    """Direct lookup using the raw URL approach"""
+    if not await check_premium_access(ctx):
+        return
+    
+    await ctx.send(f"🔍 Looking up Epic account by name: `{username}`... (using direct API)")
+    
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: direct_epic_lookup(username)
+        )
+        
+        if result and not result.get('error'):
+            embed = discord.Embed(
+                title=f"Epic Account: {result.get('displayName', 'Unknown')}",
+                color=discord.Color.green()
+            )
+            
+            embed.add_field(name="Account ID", value=result.get('id', result.get('accountId', 'Unknown')), inline=False)
+            
+            # Format links/externalAuths
+            if 'links' in result and result['links']:
+                linked = []
+                for platform, data in result['links'].items():
+                    if isinstance(data, dict) and 'value' in data:
+                        linked.append(f"{platform}: {data['value']}")
+                    else:
+                        linked.append(f"{platform}: {data}")
+                if linked:
+                    embed.add_field(name="Linked Accounts", value="\n".join(linked), inline=False)
+                    
+            if 'externalAuths' in result and result['externalAuths']:
+                linked = []
+                for platform, data in result['externalAuths'].items():
+                    if isinstance(data, dict) and 'externalDisplayName' in data:
+                        linked.append(f"{platform}: {data['externalDisplayName']}")
+                    else:
+                        linked.append(f"{platform}: {data}")
+                if linked:
+                    embed.add_field(name="Linked Accounts", value="\n".join(linked), inline=False)
+            
+            await ctx.send(embed=embed)
+        else:
+            await ctx.send(f"❌ Error looking up account: {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        logger.error(f"Error in direct lookup command: {e}")
         await ctx.send(f"❌ Error looking up account: {str(e)}")
 
 
@@ -944,6 +1073,11 @@ async def custom_commands_help(ctx):
                         value="Look up an Epic Games account by name or ID\n"
                               "mode can be 'name' or 'id' (default: auto-detect)",
                         inline=False)
+        
+        embed.add_field(name="!directlookup [username]",
+                        value="Look up an Epic Games account by name using direct API access\n"
+                              "Use this if regular lookup fails with 403 errors",
+                        inline=False)
                     
         embed.add_field(name="!setup #channel1 #channel2 #channel3",
                         value="Set up channels for the bot (admin only)\n"
@@ -980,7 +1114,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print("Current Time (UTC): 2025-09-01 09:56:03")
+    print("Current Time (UTC): 2025-09-01 10:19:04")
     print("Use Ctrl+C to stop")
     
     try:
