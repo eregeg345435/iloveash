@@ -44,7 +44,7 @@ logger = logging.getLogger("discord_bot")
 
 # --- USER CONFIG (ALL IN ONE FILE) ---
 # Put your bot token here or in environment variable (recommended)
-BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in environment variables
+BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "MTQxMTYwNzA3MTA1MjI3MTY2Ng.abcdef.ghijklmnopqrstuvwxyz1234567890AB")  # Empty default, must be set in environment variables
 
 # Premium command password
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
