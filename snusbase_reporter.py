@@ -1,24 +1,35 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Enhanced Discord + Snusbase Reporter
-- Monitors a Discord webhook for uploaded text files with usernames
-- Progress/results messages: DISCORD_WEBHOOK (auto-deleted, no sensitive details)
-- Final output: FINISH_WEBHOOK (kept, formatted as code block)
+Advanced Discord Bot with PDF Processing
+- Extracts information from and unlocks PDF files
+- Checks Epic Games account status via API
+Last updated: 2025-09-01 08:07:13
 """
 
 import os
 import json
 import time
 import logging
-import threading
 import re
+import asyncio
+import io
+import tempfile
+import sys
 from typing import List, Dict, Tuple, Union, Optional
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
-from io import StringIO
+import discord
+from discord.ext import commands
 import datetime
+import PyPDF2
+import traceback
+
+# Silence PyNaCl warning if not installed
+try:
+    import nacl
+except ImportError:
+    logging.warning("PyNaCl is not installed, voice will NOT be supported")
 
 # Set up logging
 logging.basicConfig(
@@ -26,668 +37,853 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("snusbase_report.log")
+        logging.FileHandler("discord_bot.log")
     ]
 )
-logger = logging.getLogger("snusbase_reporter")
+logger = logging.getLogger("discord_bot")
 
-# --- USER CONFIG ---
-# Original webhooks
-DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1411256887797878884/q1CzdbfYW17Dr06zFg8w2JmqlzGtdtWlanYBlb1wmJvKfptX-puB_3jS8AwolSAHzT6K"
-FINISH_WEBHOOK = "https://discord.com/api/webhooks/1411254674908250203/kaQyNHbMsXnxMwT_QT0FL78qHPLsxdqwCkhStsJ77GlMT4fqGkovWovxFBZLVs9-ecfX"
+# --- USER CONFIG (ALL IN ONE FILE) ---
+# Put your bot token here or in environment variable (recommended)
+BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "MTQxMTYwNzA3MTA1MjI3MTY2Ng.GQhNR4.yi80FMyGvGRDFxOGXwirMtMusn4zm9NFVim4HM")
 
-# New input webhook to monitor for file uploads
-INPUT_WEBHOOK = "https://discord.com/api/webhooks/1411603435190751312/a3WMELh4M8sB1kdU-jIzwZ6KRkTjGHp42_SCqW67zBw_05XgAHqkpFOv4OEtJozvJ_49"
+# Premium command password
+PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
-SNUSBASE_API_KEY = "sb3afud8h893krzzy8ec9r6s5m7u7n"
-API_URL = "https://api.snusbase.com/data/search"
-IP_WHOIS_URL = "https://api.snusbase.com/tools/ip-whois"
-BREACH_FILTER = "TWITTER_COM"
-CONCURRENCY = 8
-RATE_LIMIT_DELAY = 0.12
-CHECK_INTERVAL = 60  # How often to check Discord for new files (seconds)
+# Bot version info
+LAST_UPDATED = "2025-09-01 08:07:13"
+BOT_USER = "eregeg345435"
+
+# Epic API base URL
+API_BASE = "https://api.proswapper.xyz/external"
+
+# Default to 0 - will be set by the user with the setup command
+NAMES_CHANNEL_ID = 0  # Channel for user submissions
+PRE_SEARCH_CHANNEL_ID = 0  # Channel for progress updates
+POST_SEARCH_CHANNEL_ID = 0  # Channel for final results
+
+# Server-specific channel configurations
+server_configs = {}
+
+# Store user IDs who have been authorized for premium commands
+authorized_users = set()
+
+# Set to track already processed account IDs to prevent duplicates
+processed_account_ids = set()
+
+# Try to load processed account IDs from file
+try:
+    if os.path.exists("processed_accounts.json"):
+        with open("processed_accounts.json", "r") as f:
+            processed_account_ids = set(json.load(f))
+except Exception as e:
+    logger.error(f"Error loading processed accounts: {e}")
+
+# Delete messages after processing
+DELETE_MESSAGES = True
+
+# Delay before message deletion (in seconds)
+MESSAGE_DELETE_DELAY = 2
 # -------------------
 
-# Global tracking of processed Discord messages to avoid duplicates
-processed_message_ids = set()
-_send_lock = threading.Lock()
+# Set up Discord bot with intents
+intents = discord.Intents.default()
+intents.message_content = True  # Enable message content intent
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-def _http_post_json(url: str, payload: dict, timeout: int = 30):
-    """Send a POST request with JSON payload"""
-    body = json.dumps(payload).encode("utf-8")
-    r = requests.post(url, headers={"Content-Type": "application/json"}, data=body, timeout=timeout)
-    try: 
-        data = r.json()
-    except Exception: 
-        data = r.text
-    return r.status_code, data
+# Processing lock to prevent multiple concurrent processes
+processing_lock = asyncio.Lock()
 
-def _http_get_json(url: str, params: dict = None, timeout: int = 30):
-    """Send a GET request and return JSON response"""
-    r = requests.get(url, params=params, timeout=timeout)
-    try: 
-        data = r.json()
-    except Exception: 
-        data = r.text
-    return r.status_code, data
 
-def _chunk(text: str, limit=2000) -> List[str]:
-    """Split text into chunks respecting Discord's message size limit"""
-    if not text: 
-        return []
-    out = []
-    while text:
-        if len(text) <= limit: 
-            out.append(text)
-            break
-        cut = text.rfind("\n", 0, limit)
-        if cut == -1 or cut < limit//3: 
-            out.append(text[:limit])
-            text = text[limit:]
-        else: 
-            out.append(text[:cut])
-            text = text[cut+1:]
-    return out
+def epic_lookup(value, mode="name"):
+    """
+    Look up Epic account info by display name or account ID.
 
-def send_discord_message(
-    webhook_url: str, 
-    content: str = None, *, 
-    username: str = None, 
-    avatar_url: str = None, 
-    embeds: list = None,
-    retries: int = 3, 
-    return_id: bool = False,
-):
-    """Send a message to a Discord webhook"""
-    if not webhook_url or (not content and not embeds): 
-        return None
-    url = webhook_url.rstrip("/") + "?wait=true"
-    msg_ids = []
-    
-    def post(payload: dict):
-        nonlocal retries
-        while True:
-            with _send_lock:
-                status, data = _http_post_json(url, payload)
-            if status in (200, 204): 
-                return data if isinstance(data, dict) else {}
-            if status == 429:
-                try: 
-                    retry_after = float(getattr(data, "get", lambda *_: 1.0)("retry_after", 1.0))
-                except Exception: 
-                    retry_after = 1.0
-                time.sleep(max(0.05, retry_after))
-                continue
-            if status >= 500 and retries > 0:
-                retries -= 1
-                time.sleep(0.3)
-                continue
-            logger.error(f"Discord webhook error {status}: {data}")
-            return {}
-    
-    if content:
-        for part in _chunk(content, 2000):
-            payload = {"content": part}
-            if username: 
-                payload["username"] = username
-            if avatar_url: 
-                payload["avatar_url"] = avatar_url
-            if embeds: 
-                payload["embeds"] = embeds
-            resp = post(payload)
-            embeds = None
-            if RATE_LIMIT_DELAY: 
-                time.sleep(RATE_LIMIT_DELAY)
-            if return_id and resp and 'id' in resp: 
-                msg_ids.append(resp['id'])
-    else:
-        payload = {}
-        if username: 
-            payload["username"] = username
-        if avatar_url: 
-            payload["avatar_url"] = avatar_url
-        if embeds: 
-            payload["embeds"] = embeds
-        resp = post(payload)
-        if return_id and resp and 'id' in resp: 
-            msg_ids.append(resp['id'])
-    
-    if return_id: 
-        return msg_ids if len(msg_ids) > 1 else (msg_ids[0] if msg_ids else None)
-    return None
-
-def delete_discord_message(webhook_url: str, message_id: str):
-    """Delete a Discord message by ID"""
-    url = f"{webhook_url.rstrip('/')}/messages/{message_id}"
-    with _send_lock:
-        try:
-            resp = requests.delete(url, timeout=7)
-            return resp.status_code in (204, 200)
-        except Exception:
-            return False
-
-def delete_many_messages(webhook_url: str, message_ids: List[str]):
-    """Delete multiple Discord messages"""
-    with ThreadPoolExecutor(max_workers=12) as ex:
-        list(ex.map(lambda mid: delete_discord_message(webhook_url, mid), message_ids))
-
-def extract_handle(link: str, domain: str) -> str:
-    """Extract a handle from a social media link"""
+    mode: "name" or "id"
+    value: the display name (string) or the 32-char account ID
+    """
+    if mode not in {"name", "id"}:
+        raise ValueError("mode must be 'name' or 'id'")
+    url = f"{API_BASE}/{mode}/{value}"
     try:
-        handle = link.split(f"{domain}/")[-1]
-        handle = handle.split('?')[0].split('#')[0].rstrip('/').strip()
-        return handle
-    except Exception: 
-        return ""
-
-def load_users_from_text(text: str) -> List[Dict[str, str]]:
-    """Parse user data from text content"""
-    users = []
-    for line in text.splitlines():
-        if not line.strip(): 
-            continue
-        parts = [x.strip() for x in line.strip().split("|")]
-        if len(parts) >= 2:
-            username_tag = parts[0]
-            twitter_link = parts[1]
-            twitch_link = parts[2] if len(parts) > 2 else ""
-            
-            if "#" in username_tag:
-                username, discriminator = username_tag.split("#", 1)
-            else: 
-                username, discriminator = username_tag, ""
-                
-            users.append({
-                "username": username, 
-                "discriminator": discriminator,
-                "twitter_link": twitter_link, 
-                "twitch_link": twitch_link
-            })
-    return users
-
-def query_snusbase_api(term, search_type, max_retries=4, backoff_factor=1.5):
-    """Query the Snusbase API"""
-    headers = {"Auth": SNUSBASE_API_KEY, "Content-Type": "application/json"}
-    data = {"terms": [term], "types": [search_type]}
-    attempt = 0
-    
-    while attempt < max_retries:
-        try:
-            resp = requests.post(API_URL, headers=headers, json=data, timeout=15)
-            logger.debug(f"Snusbase API [{search_type}] {term} status={resp.status_code}")
-            
-            if resp.status_code == 401:
-                logger.error("ERROR: Snusbase API key unauthorized!")
-                break
-                
-            resp.raise_for_status()
-            resp_json = resp.json()
-            
-            all_results = []
-            for db, entries in resp_json.get("results", {}).items():
-                for entry in entries:
-                    entry["breach"] = db
-                    all_results.append(entry)
-            return all_results
-            
-        except requests.exceptions.HTTPError as e:
-            if resp.status_code == 503:
-                wait_time = backoff_factor ** attempt
-                time.sleep(wait_time)
-                attempt += 1
-                continue
-            logger.error(f"HTTP error for {search_type} {term}: {e}")
-            break
-            
-        except Exception as e:
-            logger.error(f"API error for {search_type} {term}: {e}")
-            break
-            
-    return []
-
-def lookup_ip_location(ip_list):
-    """Look up location information for IP addresses"""
-    if not ip_list: 
-        return None
-    headers = {"Auth": SNUSBASE_API_KEY, "Content-Type": "application/json"}
-    data = {"terms": ip_list}
-    
-    try:
-        resp = requests.post(IP_WHOIS_URL, headers=headers, json=data, timeout=15)
-        logger.debug("IP WHOIS status %s", resp.status_code)
+        resp = requests.get(url, timeout=12)
         resp.raise_for_status()
-        
-        results = resp.json().get("results", {})
-        locations = []
-        
-        for ip, info in results.items():
-            city = info.get("city", "")
-            region = info.get("regionName", "")
-            country = info.get("country", "")
-            
-            if city or region or country:
-                loc = ", ".join(filter(None, [city, region, country]))
-                locations.append(loc)
-                
-        if not locations: 
-            return None
-        return max(set(locations), key=locations.count)
-        
+        return resp.json()
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            # Account not found - it's inactive
+            return {"status": "INACTIVE", "message": "Account not found or inactive"}
+        logger.error(f"HTTP error in epic_lookup: {e}")
+        return {"status": "ERROR", "message": f"HTTP error: {e}"}
     except Exception as e:
-        logger.error(f"IP WHOIS lookup error: {e}")
+        logger.error(f"Error in epic_lookup: {e}")
+        return {"status": "ERROR", "message": f"Error: {e}"}
+
+
+async def check_account_status(account_id):
+    """Asynchronous wrapper for Epic account lookup"""
+    if not account_id:
         return None
-
-class ProgressReporter:
-    """Reports progress to Discord"""
-    
-    def __init__(self, webhook: str, finish_webhook: str, phase_name: str, total: int, username: str, summary_to_finish=True):
-        self.webhook = webhook
-        self.finish_webhook = finish_webhook or webhook
-        self.phase_name = phase_name
-        self.total = total
-        self.username = username
-        self.summary_to_finish = summary_to_finish
-        self.start_ts = time.time()
-        self.count_ok = 0
-        self.count_skip = 0
-        self.count_nores = 0
-        self._msg_ids = []
         
-        msg_id = send_discord_message(
-            self.webhook,
-            f"Starting {self.phase_name} — 0/{self.total}",
-            username=self.username,
-            return_id=True
+    # Clean up the account ID (remove any non-alphanumeric characters)
+    account_id = re.sub(r'[^a-zA-Z0-9]', '', account_id)
+    
+    # Validate account ID format (usually 32 characters for Epic)
+    if len(account_id) != 32:
+        return {"status": "INVALID", "message": f"Invalid account ID format: {account_id}"}
+        
+    # Run the API call in a thread pool to avoid blocking
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(
+            None, 
+            lambda: epic_lookup(account_id, mode="id")
         )
-        if msg_id: 
-            self._msg_ids.append(msg_id)
-
-    def step(self, index1: int, label: str):
-        """Report progress on a single step"""
-        msg_id = send_discord_message(
-            self.webhook,
-            f"Going through {index1}/{self.total}: `{label}`",
-            username=self.username,
-            return_id=True
-        )
-        if msg_id: 
-            self._msg_ids.append(msg_id)
-        logger.info(f"PROGRESS: {self.phase_name} {index1}/{self.total} {label}")
-
-    def item_result(self, label: str, data: Union[str, dict, list]):
-        """Report result for a single item"""
-        # Only display non-sensitive status for first pass usernames
-        if isinstance(data, dict) and ("emails_collected" in data or "twitter_handle" in data):
-            status = data.get("status", "").upper()
-            text = f"Status: {status}"
-            if status == "OK":
-                text += " (emails found)"
-            elif status == "NO_RESULTS":
-                text += " (no results)"
-            elif status == "SKIP":
-                text += " (skipped)"
-            elif status == "ERROR":
-                text += f" (error: {data.get('error', '')})"
-        elif isinstance(data, (dict, list)):
-            text = "```json\n" + json.dumps(data, ensure_ascii=False, indent=2) + "\n```"
-            status = data.get("status", "").upper() if isinstance(data, dict) else ""
-        else:
-            text = str(data)
-            status = ""
+        
+        # If the account is active, add status information
+        if result and "status" not in result:
+            result["status"] = "ACTIVE"
             
-        if "SKIP" in status: 
-            self.count_skip += 1
-        elif "NO" in status and "RESULT" in status: 
-            self.count_nores += 1
-        else: 
-            self.count_ok += 1
-            
-        msg_id = send_discord_message(
-            self.webhook,
-            f"Result for `{label}`:\n{text}",
-            username=self.username,
-            return_id=True
-        )
-        if msg_id: 
-            self._msg_ids.append(msg_id)
-        logger.info(f"RESULT: {label} -> {status}")
+        return result
+    except Exception as e:
+        logger.error(f"Error checking account status: {e}")
+        return {"status": "ERROR", "message": f"Error checking account status: {e}"}
 
-    def finish(self):
-        """Finish reporting and clean up messages"""
-        elapsed = time.time() - self.start_ts
-        summary = (
-            f"✅ Finished {self.phase_name} in {elapsed:.1f}s\n"
-            f"- Total: {self.total}\n"
-            f"- OK: {self.count_ok} | Skipped: {self.count_skip} | No Results: {self.count_nores}"
-        )
-        if self.summary_to_finish:
-            send_discord_message(self.finish_webhook, summary, username=self.username)
+
+def get_channels(guild_id):
+    """Get the configured channels for a guild"""
+    if guild_id in server_configs:
+        config = server_configs[guild_id]
+        names_channel_id = config["names_channel"]
+        pre_search_channel_id = config["pre_search_channel"]
+        post_search_channel_id = config["post_search_channel"]
+    else:
+        # Fall back to global config
+        names_channel_id = NAMES_CHANNEL_ID
+        pre_search_channel_id = PRE_SEARCH_CHANNEL_ID
+        post_search_channel_id = POST_SEARCH_CHANNEL_ID
+
+    return names_channel_id, pre_search_channel_id, post_search_channel_id
+
+
+def save_processed_account_ids():
+    """Save the processed account IDs to a JSON file"""
+    try:
+        with open("processed_accounts.json", "w") as f:
+            json.dump(list(processed_account_ids), f)
+    except Exception as e:
+        logger.error(f"Error saving processed accounts: {e}")
+
+
+def extract_user_info_from_text(text):
+    """Extract user information from PDF text"""
+    info = {
+        'username': None,
+        'email': None,
+        'account_id': None,
+        'creation_date': None,
+        'transactions': [],
+        'cards': [],
+        'oldest_ip': None,
+        'oldest_ip_date': None,
+        'platform': None,
+        'account_disabled': False,
+        'disable_count': 0,
+        'disable_dates': [],
+        'reactivated': False,
+        'reactivate_dates': [],
+        'deactivated': False,
+        'email_changed': False,
+        'compromised_account': False,
+        'display_names': [],
+        'first_name': None,
+        'last_name': None,
+        'all_emails': [],
+        'source_file': None,  # To store the source file name
+        'is_encrypted': False,  # To track if the PDF was encrypted
+        'account_status': None  # To store the account status from the API
+    }
+
+    # Look for file name in the text
+    filename_match = re.search(r'(?:information extracted from|file|data source)[:\s]+([^\n]+\.(?:pdf|txt|json))', 
+                               text, re.IGNORECASE)
+    if filename_match:
+        info['source_file'] = filename_match.group(1).strip()
+
+    # Look for Display Name, externalAuthDisplayName and similar patterns
+    display_name_patterns = [
+        r'(?:Display\s*Name|externalAuthDisplayName|displayName|username)[s\:]*[:\s="]+([^\r\n,;"\'][\S][^\r\n,;"\']+)',
+        r'displayName\s*:?\s*["\'"]([^"\'"\n]+)["\'"]\s*[,;]?',
+        r'name\s*:?\s*["\'"]([^"\'"\n]+)["\'"]\s*[,;]?',
+        r'gamertag\s*:?\s*["\'"]([^"\'"\n]+)["\'"]\s*[,;]?'
+    ]
+    
+    for pattern in display_name_patterns:
+        display_name_matches = re.finditer(pattern, text, re.IGNORECASE)
+        for match in display_name_matches:
+            display_name = match.group(1).strip()
+            # Remove quotes if present
+            if display_name.startswith('"') and display_name.endswith('"'):
+                display_name = display_name[1:-1]
+            if display_name and display_name not in info['display_names']:
+                info['display_names'].append(display_name)
+
+    # Look for email addresses
+    email_patterns = [
+        r'(?:Current\s*Email|Original\s*Email|email)[:\s="]+\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})',
+        r'[\w\.-]+@[\w\.-]+\.\w+',  # Standard email pattern
+        r'email\s*[=:]\s*"([^"]+@[^"]+\.\w+)"',  # email = "user@example.com"
+        r'email\s*[=:]\s*([^\s;,]+@[^\s;,]+\.\w+)'  # email = user@example.com
+    ]
+
+    for pattern in email_patterns:
+        email_matches = re.finditer(pattern, text, re.IGNORECASE)
+        for match in email_matches:
+            email = match.group(1) if len(match.groups()) > 0 else match.group(0)
+            email = email.strip('"\'')  # Remove any quotes
+            if '@' in email and email not in info['all_emails']:
+                info['all_emails'].append(email)
+
+                # Check if this is specifically marked as current email
+                current_context = text[max(0, match.start() - 20):match.start()]
+                if 'current' in current_context.lower():
+                    info['email'] = email
+
+    # Use the first email as the email if not set
+    if info['all_emails'] and not info['email']:
+        info['email'] = info['all_emails'][0]
+
+    # Look for account ID (various formats)
+    account_id_patterns = [
+        r'(?:Account\s*ID|account|user|id)[\s_-]*(?:id|number|#)[\s:_-]+([^\s\n,]+)',
+        r'Account\s*ID:?\s*([a-f0-9]+)'  # Format from image 7
+    ]
+    
+    for pattern in account_id_patterns:
+        account_id_match = re.search(pattern, text, re.IGNORECASE)
+        if account_id_match:
+            info['account_id'] = account_id_match.group(1).strip()
+            break
+
+    # Look for creation/registration date
+    date_patterns = [
+        r'Creation\s*Date:?\s*(\d{1,2}[\/\.-]\d{1,2}[\/\.-]\d{2,4})',  # Format from image 7
+        r'(?:created|registered|joined|creation|registration|date)[\s:_-]+(\d{1,2}[\/\.-]\d{1,2}[\/\.-]\d{2,4}|\d{4}[\/\.-]\d{1,2}[\/\.-]\d{1,2})'
+    ]
+    
+    for pattern in date_patterns:
+        date_match = re.search(pattern, text, re.IGNORECASE)
+        if date_match:
+            info['creation_date'] = date_match.group(1)
+            break
+
+    # Look for platform info (format from image 7)
+    platform_match = re.search(r'Platform:?\s*([^\n]+)', text, re.IGNORECASE)
+    if platform_match:
+        platform_text = platform_match.group(1).strip().lower()
+        # First check for exact matches to ensure platform is detected correctly
+        if platform_text == "playstation (psn)" or platform_text == "playstation" or platform_text == "psn" or platform_text == "playstation network":
+            info['platform'] = 'PlayStation (PSN)'
+        elif platform_text == "xbox (xbl)" or platform_text == "xbox" or platform_text == "xbl" or platform_text == "xbox live":
+            info['platform'] = 'Xbox (XBL)'
+        elif platform_text == "pc/epic games" or platform_text == "pc" or platform_text == "epic games" or platform_text == "epic":
+            info['platform'] = 'PC/Epic Games'
+        elif platform_text == "nintendo switch" or platform_text == "switch" or platform_text == "nintendo":
+            info['platform'] = 'Nintendo Switch'
+        elif platform_text == "mobile (ios/android)" or platform_text == "mobile" or platform_text == "ios" or platform_text == "android":
+            info['platform'] = 'Mobile (iOS/Android)'
+        elif platform_text == "1":  # Special case from Image 8
+            info['platform'] = 'PlayStation (PSN)'
         else:
-            send_discord_message(self.webhook, summary, username=self.username)
-        logger.info(f"Deleting {len(self._msg_ids)} messages from {self.webhook}...")
-        delete_many_messages(self.webhook, self._msg_ids)
+            # Fallback to checking for partial matches
+            if any(term in platform_text for term in ["playstation", "psn", "ps4", "ps5"]):
+                info['platform'] = 'PlayStation (PSN)'
+            elif any(term in platform_text for term in ["xbox", "xbl", "xb1", "xsx"]):
+                info['platform'] = 'Xbox (XBL)'
+            elif any(term in platform_text for term in ["pc", "epic", "computer", "windows"]):
+                info['platform'] = 'PC/Epic Games'
+            elif any(term in platform_text for term in ["nintendo", "switch"]):
+                info['platform'] = 'Nintendo Switch'
+            elif any(term in platform_text for term in ["mobile", "ios", "android", "phone"]):
+                info['platform'] = 'Mobile (iOS/Android)'
+            else:
+                # If no platform was detected, just store the original text
+                info['platform'] = platform_match.group(1).strip()
 
-def _first_pass_one(user: Dict[str, str]) -> Tuple[str, Dict[str, str], List[str]]:
-    """Process a single user in the first pass"""
-    ident = f"{user['username']}#{user['discriminator']}"
-    handle = extract_handle(user.get("twitter_link", ""), "twitter.com")
+    # Look for IP addresses with dates
+    ip_patterns = [
+        r'Oldest\s*IP:?\s*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})',  # Format from image 7
+        r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?:[\s:_-]+(\d{1,2}/\d{1,2}/\d{2,4}))?'
+    ]
     
-    if not handle:
-        return ident, {"status": "SKIP", "reason": "no twitter handle", "twitter_link": user.get("twitter_link", "")}, []
-        
-    start_time = time.time()
-    results = query_snusbase_api(handle, "username")
-    elapsed = time.time() - start_time
-    logger.debug(f"Lookup for {handle} took {elapsed:.2f} seconds")
-    
-    emails = []
-    for entry in results:
-        breach_name = entry.get("breach", "")
-        email_val = entry.get("email", "")
-        logger.debug(f"Entry: {entry}")
-        logger.debug(f"Breach: {breach_name}, Email: {email_val}")
-        
-        if BREACH_FILTER and BREACH_FILTER.lower() not in breach_name.lower():
-            continue
-        if not email_val: 
-            continue
-        emails.append(email_val)
-        
-    if not emails:
-        return ident, {"status": "NO_RESULTS", "twitter_handle": handle}, []
-        
-    # Only return summary, not emails for progress reporting
-    return ident, {"status": "OK", "twitter_handle": handle, "emails_collected": "[hidden]"}, emails
+    for pattern in ip_patterns:
+        ip_match = re.search(pattern, text, re.IGNORECASE)
+        if ip_match:
+            info['oldest_ip'] = ip_match.group(1)
+            if len(ip_match.groups()) > 1 and ip_match.group(2):
+                info['oldest_ip_date'] = ip_match.group(2)
+            break
 
-def first_pass(users: List[Dict[str, str]], webhook: str, finish_webhook: str) -> Dict[str, List[Dict[str, str]]]:
-    """First pass: search for emails based on Twitter handles"""
-    email_user_map: Dict[str, List[Dict[str, str]]] = defaultdict(list)
-    rep = ProgressReporter(webhook, finish_webhook, "username scan", len(users), username="Usernames", summary_to_finish=True)
-    results_by_idx = {}
-    users_with_idx = list(enumerate(users, 1))
-    
-    with ThreadPoolExecutor(max_workers=CONCURRENCY) as ex:
-        future_to_idx = {ex.submit(_first_pass_one, user): idx for idx, user in users_with_idx}
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            user = users[idx-1]
-            try: 
-                ident, result, emails = future.result()
+    # Look for account status
+    status_match = re.search(r'Account\s*Status:?\s*([^\n]+)', text, re.IGNORECASE)
+    if status_match:
+        status_text = status_match.group(1).lower().strip()
+        if 'disabled' in status_text or 'disable' in status_text:
+            info['account_disabled'] = True
+            # Try to extract disable count if available
+            count_match = re.search(r'disabled\s+(\d+)\s+time', status_text, re.IGNORECASE)
+            if count_match:
+                info['disable_count'] = int(count_match.group(1))
+            else:
+                info['disable_count'] = 1
+                
+            # Check for other status indicators
+            if 'compromised' in status_text:
+                info['compromised_account'] = True
+            if 'deactivated' in status_text:
+                info['deactivated'] = True
+            if 'reactivated' in status_text:
+                info['reactivated'] = True
+        elif 'no disable' in status_text or 'no history' in status_text:
+            info['account_disabled'] = False
+
+    # Look for transactions (HISTORY_ACCOUNT entries) to determine if account was disabled/compromised
+    transaction_matches = re.finditer(r'HISTORY_ACCOUNT_([A-Z_]+)\s+(\d{1,2}/\d{1,2}/\d{2,4})\s+(.+?)(?=\n|$)', text)
+    for match in transaction_matches:
+        transaction_type = match.group(1)
+        date = match.group(2)
+        details = match.group(3).strip()
+
+        # Track account disable/reactivate events
+        if 'DISABLE' in transaction_type:
+            info['account_disabled'] = True
+            info['disable_count'] += 1
+            info['disable_dates'].append(date)
+            if 'meta data' in details.lower():
+                info['deactivated'] = True
+
+        if 'REACTIVE' in transaction_type or 'REENABLE' in transaction_type or 'ENABLED' in transaction_type:
+            info['reactivated'] = True
+            info['reactivate_dates'].append(date)
+
+        # Check for compromised account pattern
+        if 'METADATA_ADD' in transaction_type and 'DISABLED_REASON' in details and 'Compromised' in details:
+            info['compromised_account'] = True
+
+        info['transactions'].append({
+            'type': transaction_type,
+            'date': date,
+            'details': details
+        })
+
+    return info
+
+
+async def process_pdf(ctx, attachment, password=None, delete_message=True):
+    """Process a PDF file to extract user information and unlock if needed"""
+    message_to_delete = None
+    if hasattr(ctx, 'message'):
+        message_to_delete = ctx.message
+
+    try:
+        # Download the PDF file first, before deleting the message
+        try:
+            file_bytes = await attachment.read()
+            if not file_bytes:
+                await ctx.send("Could not read the PDF file (file is empty).")
+                return
+        except discord.NotFound:
+            await ctx.send("❌ Error: The file was not found or was deleted. Please upload it again.")
+            return
+        except discord.HTTPException as e:
+            await ctx.send(f"❌ Error downloading the PDF: HTTP Error {e.status}: {e.text}")
+            return
+        except Exception as e:
+            await ctx.send(f"❌ Error downloading the PDF: {str(e)}")
+            logger.error(f"PDF download error: {str(e)}\n{traceback.format_exc()}")
+            return
+        
+        # Create a response message with file info
+        initial_msg = await ctx.send(f"Processing PDF: `{attachment.filename}` ({attachment.size / 1024:.1f} KB)")
+        
+        # Now that we've downloaded the file and sent the initial message, we can delete the original message
+        if delete_message and message_to_delete:
+            try:
+                await message_to_delete.delete()
             except Exception as e:
-                ident = f"{user['username']}#{user['discriminator']}"
-                result = {"status": "ERROR", "error": str(e)}
-                emails = []
-            results_by_idx[idx] = (user, ident, result, emails)
-            
-    for idx in range(1, len(users)+1):
-        user, ident, result, emails = results_by_idx[idx]
-        rep.step(idx, f"{user['username']}#{user['discriminator']}")
-        rep.item_result(ident, result)
-        
-        for e in emails:
-            email_user_map[e].append({
-                "username": user['username'],
-                "discriminator": user['discriminator'],
-                "twitter_link": user['twitter_link'],
-                "twitch_link": user['twitch_link'],
-            })
-            
-        if RATE_LIMIT_DELAY: 
-            time.sleep(RATE_LIMIT_DELAY)
-            
-    rep.finish()
-    return email_user_map
+                logger.error(f"Error deleting message: {str(e)}")
 
-def _second_pass_one(email: str, attached_users: List[Dict[str, str]]) -> List[Tuple[str, dict]]:
-    """Process a single email in the second pass"""
-    results = query_snusbase_api(email, "email")
-    logger.debug(f"RAW API RESPONSE FOR {email}: {results}")
-    
-    ip_candidates, usernames, birthdates = [], [], []
-    for res in results:
-        lastip = res.get("lastip", "")
-        regip = res.get("regip", "")
-        
-        if lastip: 
-            ip_candidates.append(lastip)
-        if regip: 
-            ip_candidates.append(regip)
-            
-        uname = res.get("username", "")
-        if uname: 
-            usernames.append(uname)
-            
-        bdate = res.get("birthdate", "") or res.get("birthday", "")
-        if bdate: 
-            birthdates.append(bdate)
-            
-    ip_candidates = list(set(ip_candidates))
-    location = lookup_ip_location(ip_candidates)
-    
-    most_common_username = max(set(usernames), key=usernames.count) if usernames else "NA"
-    birthdate_out = birthdates[0] if birthdates else "NA"
-    ips_out = ", ".join(sorted(ip_candidates)) if ip_candidates else "NA"
-    location_out = location if location else "NA"
-    
-    outs = []
-    for info in attached_users:
-        twitter_handle = extract_handle(info.get("twitter_link", ""), "twitter.com") or "NA"
-        out = {
-            "status": "OK",
-            "user": f"{info['username']}#{info['discriminator']}",
-            "twitter": info["twitter_link"],
-            "twitch": info["twitch_link"],
-            "email": email,
-            "ips_found": ips_out,
-            "most_common_ip_location": location_out,
-            "most_common_username": most_common_username,
-            "twitter_username": twitter_handle,
-            "birthdate": birthdate_out,
-        }
-        outs.append((email, out))
-    return outs
+        # Create a file-like object from the bytes
+        pdf_file = io.BytesIO(file_bytes)
 
-def format_final_output(all_results: List[dict]) -> str:
-    """Format all results into a final output string"""
-    lines = []
-    lines.append("Snusbase Email Search Results\n====================================\n")
-    for res in all_results:
-        lines.append(json.dumps(res, ensure_ascii=False, indent=2))
-        lines.append("------------------------------------")
-    lines.append("====================================")
-    return "```json\n" + "\n".join(lines) + "\n```"
+        try:
+            # Open the PDF with PyPDF2
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            is_encrypted = pdf_reader.is_encrypted
 
-def second_pass(email_user_map: Dict[str, List[Dict[str, str]]], webhook: str, finish_webhook: str):
-    """Second pass: search for additional data based on found emails"""
-    all_emails = list(email_user_map.keys())
-    rep = ProgressReporter(webhook, finish_webhook, "email search", len(all_emails), username="Emails", summary_to_finish=True)
-    results_by_idx = {}
-    emails_with_idx = list(enumerate(all_emails, 1))
-    all_results = []
-    
-    with ThreadPoolExecutor(max_workers=CONCURRENCY) as ex:
-        future_to_idx = {ex.submit(_second_pass_one, email, email_user_map[email]): idx for idx, email in emails_with_idx}
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            email = all_emails[idx-1]
-            try: 
-                outs = future.result()
-            except Exception as e: 
-                outs = [(email, {"status": "ERROR", "error": str(e)})]
-            results_by_idx[idx] = (email, outs)
-            
-    for idx in range(1, len(all_emails)+1):
-        email, outs = results_by_idx[idx]
-        rep.step(idx, email)
-        for _, data in outs:
-            rep.item_result(email, data)
-            all_results.append(data)
-        if RATE_LIMIT_DELAY: 
-            time.sleep(RATE_LIMIT_DELAY)
-            
-    rep.finish()
-    
-    # Send one big output to FINISH_WEBHOOK (never deleted), formatted in code block
-    final_info = format_final_output(all_results)
-    logger.info("Sending final email search output to FINISH_WEBHOOK")
-    send_discord_message(finish_webhook, final_info, username="Emails · Output")
-    return all_results
+            # Check if the PDF is encrypted
+            if is_encrypted:
+                if not password:
+                    await ctx.send("This PDF is password protected. Please provide a password with `!pdf [password]`")
+                    return
 
-def extract_webhook_id_token(webhook_url):
-    """Extract webhook ID and token from URL"""
-    match = re.search(r'webhooks/(\d+)/([^/]+)', webhook_url)
-    if match:
-        return match.group(1), match.group(2)
-    return None, None
+                # Try to decrypt with the provided password
+                try:
+                    pdf_reader.decrypt(password)
+                    # Send the success message here
+                    decryption_msg = await ctx.send("✅ PDF successfully decrypted!")
+                except Exception as e:
+                    await ctx.send("❌ Failed to decrypt PDF. The password may be incorrect.")
+                    return
 
-def get_webhook_messages(webhook_id, webhook_token, limit=25):
-    """Get recent messages from a webhook"""
-    url = f"https://discord.com/api/webhooks/{webhook_id}/{webhook_token}/messages"
-    try:
-        status, data = _http_get_json(url, params={"limit": limit})
-        if status == 200 and isinstance(data, list):
-            return data
+            # Extract text from all pages
+            all_text = ""
+            try:
+                for page in pdf_reader.pages:
+                    try:
+                        page_text = page.extract_text()
+                        if page_text:
+                            all_text += page_text + "\n\n"
+                    except:
+                        continue
+            except Exception as e:
+                logger.error(f"Error extracting all pages: {str(e)}")
+
+            # If we couldn't extract from all pages, try just the first page
+            if not all_text:
+                try:
+                    first_page = pdf_reader.pages[0]
+                    all_text = first_page.extract_text()
+                except Exception as e:
+                    await ctx.send(f"Error extracting text from PDF: {str(e)}")
+                    return
+
+            # Look for user information in the text
+            info = extract_user_info_from_text(all_text)
+            # Store the filename and encryption status
+            info['source_file'] = attachment.filename
+            info['is_encrypted'] = is_encrypted
+
+            # Check if this account ID has already been processed
+            if info['account_id'] and info['account_id'] in processed_account_ids:
+                await ctx.send(f"⚠️ This PDF has already been searched (Account ID: {info['account_id']})")
+                return
+                
+            # Check current account status using the API
+            if info['account_id']:
+                status_message = await ctx.send(f"🔍 Checking current account status for ID: `{info['account_id']}`...")
+                account_status = await check_account_status(info['account_id'])
+                info['account_status'] = account_status
+                await status_message.edit(content=f"✅ Account status check complete.")
+
+            # Format and send the results in a clean profile format
+            await send_pdf_analysis(ctx, info)
+
+            # If account ID exists, add it to the processed list and save
+            if info['account_id']:
+                processed_account_ids.add(info['account_id'])
+                save_processed_account_ids()
+
+            # Save the unlocked PDF if it was originally encrypted
+            if is_encrypted and password:
+                # Create a new PDF writer
+                pdf_writer = PyPDF2.PdfWriter()
+
+                # Add all pages to the writer
+                for page in pdf_reader.pages:
+                    pdf_writer.add_page(page)
+
+                try:
+                    # Create a temporary file for the unlocked PDF
+                    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
+                        # Write the unlocked PDF to the temporary file
+                        pdf_writer.write(temp_file)
+
+                    # Send the unlocked PDF as a Discord attachment
+                    await ctx.send("Here is the unlocked PDF:",
+                                   file=discord.File(temp_file.name, f"unlocked_{attachment.filename}"))
+
+                    # Delete the temporary file
+                    os.unlink(temp_file.name)
+                except Exception as e:
+                    logger.error(f"Error saving unlocked PDF: {str(e)}")
+                    await ctx.send("Error saving the unlocked PDF.")
+
+        except PyPDF2.errors.PdfReadError as e:
+            await ctx.send(f"❌ Error: Cannot read the PDF file. It may be corrupted or not a valid PDF. {str(e)}")
+            return
+        except Exception as e:
+            logger.error(f"Error processing PDF: {str(e)}\n{traceback.format_exc()}")
+            await ctx.send(f"❌ Error processing PDF: {str(e)}")
+            return
+
     except Exception as e:
-        logger.error(f"Error fetching webhook messages: {e}")
-    return []
+        logger.error(f"Unexpected error: {str(e)}\n{traceback.format_exc()}")
+        await ctx.send(f"❌ Unexpected error: {str(e)}")
+        return
 
-def download_attachment(url):
-    """Download an attachment from Discord"""
-    try:
-        response = requests.get(url, timeout=30)
-        if response.status_code == 200:
-            return response.text
-        logger.error(f"Failed to download attachment: HTTP {response.status_code}")
-    except Exception as e:
-        logger.error(f"Error downloading attachment: {e}")
-    return None
 
-def process_webhook_messages():
-    """Check for new files in the input webhook and process them"""
-    webhook_id, webhook_token = extract_webhook_id_token(INPUT_WEBHOOK)
-    if not webhook_id or not webhook_token:
-        logger.error(f"Could not extract ID and token from INPUT_WEBHOOK URL")
+async def send_pdf_analysis(ctx, info):
+    """Send a clean PDF analysis format, similar to Image 7"""
+    # Get the source filename
+    source_file = info.get('source_file', 'Unknown')
+
+    # Start with the header
+    output = "**📧 EMAIL CHANGE ANALYSIS**\n\n"
+    
+    # Information Source
+    if source_file:
+        output += f"**Information extracted from:** {source_file}\n\n"
+    
+    # Current Account Status from API
+    if info.get('account_status'):
+        status_data = info['account_status']
+        
+        if status_data.get('status') == 'ACTIVE':
+            output += "**🟢 ACCOUNT CURRENTLY ACTIVE**\n"
+            
+            # Include current display name if available
+            if 'displayName' in status_data:
+                output += f"**Current Display Name:** {status_data['displayName']}\n"
+                
+            # Include links if available
+            if 'links' in status_data and status_data['links']:
+                output += "**Current Linked Accounts:**\n"
+                for platform, link_data in status_data['links'].items():
+                    if isinstance(link_data, dict) and 'value' in link_data:
+                        output += f"- {platform}: {link_data['value']}\n"
+                    elif isinstance(link_data, str):
+                        output += f"- {platform}: {link_data}\n"
+                output += "\n"
+                
+        elif status_data.get('status') == 'INACTIVE':
+            output += "**🔴 ACCOUNT CURRENTLY INACTIVE**\n"
+            if 'message' in status_data:
+                output += f"{status_data['message']}\n"
+            output += "The account may have been banned, deleted, or changed username.\n\n"
+            
+        elif status_data.get('status') == 'ERROR':
+            output += "**⚠️ ERROR CHECKING ACCOUNT STATUS**\n"
+            if 'message' in status_data:
+                output += f"{status_data['message']}\n\n"
+        
+        elif status_data.get('status') == 'INVALID':
+            output += "**⚠️ INVALID ACCOUNT ID FORMAT**\n"
+            if 'message' in status_data:
+                output += f"{status_data['message']}\n\n"
+            
+    # Display Names with count if multiple
+    if info['display_names']:
+        display_names_text = ", ".join(info['display_names'])
+        output += f"**Display Names:** {display_names_text}\n"
+        if len(info['display_names']) > 1:
+            output += f"Changed: {len(info['display_names']) - 1}\n"
+    
+    # Current Email
+    if info['email']:
+        output += f"**Current Email:** {info['email']}\n"
+    
+    # Account ID
+    if info['account_id']:
+        output += f"**Account ID:** {info['account_id']}\n"
+    
+    # Creation Date
+    if info['creation_date']:
+        output += f"**Creation Date:** {info['creation_date']}\n"
+    
+    # Platform - using exact format from Image 8
+    if info['platform']:
+        output += f"**Platform:** {info['platform']}\n"
+    
+    # Oldest IP
+    if info['oldest_ip']:
+        output += f"**Oldest IP:** {info['oldest_ip']}\n"
+    
+    # Account Status
+    output += "\n**Account Status:** "
+    if info['account_disabled']:
+        output += f"Disabled {info['disable_count']} time(s)"
+        if info['compromised_account']:
+            output += ", **COMPROMISED ACCOUNT DETECTED**"
+        if info['deactivated']:
+            output += ", Deactivated (metadata added)"
+        if info['reactivated']:
+            output += ", Reactivated (metadata removed)"
+    else:
+        output += "No disable/reactivation history found"
+    
+    # Send the primary information
+    await ctx.send(output)
+    
+    # If it was originally an encrypted PDF, mention that
+    if info.get('is_encrypted', False):
+        await ctx.send("Here is the unlocked PDF.")
+
+
+async def check_premium_access(ctx):
+    """Check if the user has premium access and prompt if not"""
+    if ctx.author.id not in authorized_users:
+        await ctx.send("⚠️ This is a premium command. Please use `!authorize [password]` to access premium features.")
+        # Try to delete the message
+        try:
+            await ctx.message.delete()
+        except Exception as e:
+            pass
+        return False
+    return True
+
+
+@bot.event
+async def on_ready():
+    """Called when the bot is ready"""
+    logger.info(f"Bot logged in as {bot.user.name} ({bot.user.id})")
+    logger.info(f"Current Date: {LAST_UPDATED}")
+    logger.info(f"User: {BOT_USER}")
+    print(f"Bot is ready! Logged in as {bot.user.name}")
+    print(f"Last updated: {LAST_UPDATED}")
+    print(f"User: {BOT_USER}")
+
+
+@bot.command(name='setup')
+@commands.has_permissions(administrator=True)
+async def setup_channels(ctx, names_channel: discord.TextChannel = None, pre_search_channel: discord.TextChannel = None,
+                         post_search_channel: discord.TextChannel = None):
+    """Set up channels for the bot"""
+    # Check premium access
+    if not await check_premium_access(ctx):
+        return
+    
+    if not names_channel:
+        await ctx.send("Please specify channels: `!setup #names-channel #pre-search-channel #post-search-channel`")
+        return
+
+    if not pre_search_channel:
+        pre_search_channel = names_channel
+
+    if not post_search_channel:
+        post_search_channel = pre_search_channel
+
+    # Store the channel IDs for this guild
+    server_configs[ctx.guild.id] = {
+        "names_channel": names_channel.id,
+        "pre_search_channel": pre_search_channel.id,
+        "post_search_channel": post_search_channel.id
+    }
+
+    await ctx.send(
+        f"Channels set up successfully!\n"
+        f"Names Channel: {names_channel.mention}\n"
+        f"Pre-search Channel: {pre_search_channel.mention}\n"
+        f"Post-search Channel: {post_search_channel.mention}"
+    )
+
+
+@bot.command(name='authorize')
+async def authorize_user(ctx, password=None):
+    """Authorize a user for premium commands"""
+    if not password:
+        await ctx.send("Please provide a password: `!authorize [password]`")
+        return
+
+    if password == PREMIUM_PASSWORD:
+        authorized_users.add(ctx.author.id)
+        await ctx.send("✅ You are now authorized for premium commands!")
+        # Delete the command message to hide the password
+        try:
+            await ctx.message.delete()
+        except:
+            pass
+    else:
+        await ctx.send("❌ Invalid password.")
+        # Delete the command message to hide the password attempt
+        try:
+            await ctx.message.delete()
+        except:
+            pass
+
+
+@bot.command(name='pdf')
+async def process_pdf_command(ctx, password=None):
+    """Process a PDF file attached to the message"""
+    if not ctx.message.attachments:
+        await ctx.send("Please attach a PDF file to process.")
+        return
+
+    attachment = ctx.message.attachments[0]
+    if not attachment.filename.lower().endswith('.pdf'):
+        await ctx.send("Please attach a PDF file.")
+        return
+
+    await process_pdf(ctx, attachment, password, delete_message=True)
+
+
+@bot.command(name='lookup')
+async def lookup_command(ctx, value, mode="name"):
+    """Look up an Epic account by display name or account ID"""
+    # Check premium access
+    if not await check_premium_access(ctx):
+        return
+    
+    if not value:
+        await ctx.send("Please provide a display name or account ID to look up.")
         return
         
-    messages = get_webhook_messages(webhook_id, webhook_token)
+    if mode not in ["name", "id"]:
+        mode = "name"
     
-    for message in messages:
-        message_id = message.get("id")
+    await ctx.send(f"🔍 Looking up Epic account by {mode}: `{value}`...")
+    
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: epic_lookup(value, mode)
+        )
         
-        # Skip if we've already processed this message
-        if message_id in processed_message_ids:
-            continue
-            
-        # Look for attachments
-        attachments = message.get("attachments", [])
-        for attachment in attachments:
-            filename = attachment.get("filename", "")
-            content_type = attachment.get("content_type", "")
-            
-            # Only process text files
-            if not (filename.endswith(".txt") or content_type == "text/plain"):
-                continue
+        if result:
+            if 'status' in result and result['status'] in ['ERROR', 'INACTIVE', 'INVALID']:
+                await ctx.send(f"❌ {result.get('message', 'Unknown error')}")
+                return
                 
-            logger.info(f"Processing file attachment: {filename}")
-            
-            # Download the file content
-            file_content = download_attachment(attachment.get("url"))
-            if not file_content:
-                continue
-                
-            # Parse users from the file content
-            users = load_users_from_text(file_content)
-            if not users:
-                logger.warning(f"No valid users found in file: {filename}")
-                send_discord_message(
-                    INPUT_WEBHOOK,
-                    f"No valid users found in file: `{filename}`\nFormat should be: `Username#Tag | https://twitter.com/handle | https://twitch.tv/handle`",
-                    username="Snusbase Reporter"
-                )
-                continue
-                
-            # Acknowledge receipt
-            send_discord_message(
-                INPUT_WEBHOOK,
-                f"Processing {len(users)} users from file: `{filename}`",
-                username="Snusbase Reporter"
+            # Format the account info
+            embed = discord.Embed(
+                title=f"Epic Account: {result.get('displayName', 'Unknown')}",
+                color=discord.Color.green()
             )
             
-            # Run the processing
-            try:
-                email_user_map = first_pass(users, DISCORD_WEBHOOK, FINISH_WEBHOOK)
-                if not email_user_map:
-                    send_discord_message(
-                        INPUT_WEBHOOK,
-                        f"No emails collected for users in file: `{filename}`",
-                        username="Snusbase Reporter"
-                    )
-                    continue
+            embed.add_field(name="Account ID", value=result.get('accountId', 'Unknown'), inline=False)
+            
+            if 'externalAuths' in result and result['externalAuths']:
+                linked = []
+                for platform, data in result['externalAuths'].items():
+                    if isinstance(data, dict) and 'externalDisplayName' in data:
+                        linked.append(f"{platform}: {data['externalDisplayName']}")
+                    elif isinstance(data, str):
+                        linked.append(f"{platform}: {data}")
+                        
+                if linked:
+                    embed.add_field(name="Linked Accounts", value="\n".join(linked), inline=False)
+            
+            await ctx.send(embed=embed)
+        else:
+            await ctx.send("❌ No results found.")
+    except Exception as e:
+        logger.error(f"Error in lookup command: {e}")
+        await ctx.send(f"❌ Error looking up account: {str(e)}")
+
+
+@bot.command(name='reset')
+@commands.has_permissions(administrator=True)
+async def reset_processed_accounts(ctx):
+    """Reset the processed accounts list (admin only)"""
+    # Check premium access
+    if not await check_premium_access(ctx):
+        return
+    
+    global processed_account_ids
+    processed_account_ids = set()
+    save_processed_account_ids()
+    await ctx.send("✅ Processed accounts list has been reset.")
+
+
+@bot.command(name='version')
+async def version_info(ctx):
+    """Show version information about the bot"""
+    # Check premium access
+    if not await check_premium_access(ctx):
+        return
+    
+    embed = discord.Embed(title="Bot Version Information", color=0x00ff00)
+    embed.add_field(name="Last Updated", value=LAST_UPDATED, inline=False)
+    embed.add_field(name="User", value=BOT_USER, inline=False)
+    embed.add_field(name="Discord.py Version", value=discord.__version__, inline=True)
+    embed.add_field(name="Python Version",
+                    value=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+                    inline=True)
+    embed.set_footer(text=f"Bot is running on {os.name.upper()} platform")
+    await ctx.send(embed=embed)
+
+
+# Rename from 'help' to 'commands' to avoid conflict with built-in help
+@bot.command(name='commands')
+async def custom_commands_help(ctx):
+    """Show help information about the bot commands"""
+    # Check premium access
+    if not await check_premium_access(ctx):
+        return
+    
+    embed = discord.Embed(title="Bot Commands", color=0x00ff00)
+    embed.set_footer(text=f"Bot Last Updated: {LAST_UPDATED}")
+
+    embed.add_field(name="!pdf [password]",
+                    value="Process an attached PDF file to extract user information\n"
+                          "(Optional password if the PDF is encrypted)",
+                    inline=False)
                     
-                results = second_pass(email_user_map, DISCORD_WEBHOOK, FINISH_WEBHOOK)
-                
-                # Send a completion message to the input webhook
-                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-                send_discord_message(
-                    INPUT_WEBHOOK,
-                    f"Completed processing `{filename}` at {timestamp}\n"
-                    f"- Found data for {len(results)} entries\n"
-                    f"- Results sent to output webhook",
-                    username="Snusbase Reporter"
-                )
-                
-            except Exception as e:
-                logger.error(f"Error processing file {filename}: {e}")
-                send_discord_message(
-                    INPUT_WEBHOOK,
-                    f"Error processing file `{filename}`: {str(e)}",
-                    username="Snusbase Reporter"
-                )
-                
-        # Mark this message as processed
-        processed_message_ids.add(message_id)
-        
-        # Limit the size of the processed messages set
-        if len(processed_message_ids) > 1000:
-            # Keep only the most recent 500 message IDs
-            processed_message_ids.clear()
-            processed_message_ids.update(msg.get("id") for msg in messages[:500])
+    if ctx.author.id in authorized_users:
+        embed.add_field(name="!lookup [value] [mode]",
+                        value="Look up an Epic Games account by name or ID\n"
+                              "mode can be 'name' or 'id' (default: name)",
+                        inline=False)
+                    
+        embed.add_field(name="!setup #channel1 #channel2 #channel3",
+                        value="Set up channels for the bot (admin only)\n"
+                            "#channel1 = Names Channel\n"
+                            "#channel2 = Pre-search Channel\n"
+                            "#channel3 = Post-search Channel",
+                        inline=False)
+                    
+        embed.add_field(name="!reset",
+                        value="Reset the processed accounts list (admin only)",
+                        inline=False)
 
-def main():
-    """Main entry point"""
-    if not DISCORD_WEBHOOK.startswith("https://"):
-        logger.error("Please set a valid DISCORD_WEBHOOK.")
-        return 1
-        
-    if FINISH_WEBHOOK and not FINISH_WEBHOOK.startswith("https://"):
-        logger.error("FINISH_WEBHOOK looks invalid.")
-        return 1
-        
-    if INPUT_WEBHOOK and not INPUT_WEBHOOK.startswith("https://"):
-        logger.error("INPUT_WEBHOOK looks invalid.")
-        return 1
-    
-    # Send a startup message to the input webhook
-    send_discord_message(
-        INPUT_WEBHOOK,
-        "Snusbase Reporter started and monitoring for file uploads. Upload a text file with user data to process.",
-        username="Snusbase Reporter"
-    )
-    
-    # Run the webhook monitor in the main thread
-    logger.info(f"Starting Discord monitor for webhook: {INPUT_WEBHOOK}")
-    try:
-        while True:
+        embed.add_field(name="!version",
+                        value="Show version information for the bot",
+                        inline=False)
+
+        embed.add_field(name="!commands",
+                        value="Show this help message",
+                        inline=False)
+
+    embed.add_field(name="!authorize [password]",
+                    value="Authorize yourself for premium commands",
+                    inline=False)
+
+    await ctx.send(embed=embed)
+
+
+@bot.event
+async def on_message(message):
+    """Called when a message is sent to a channel the bot can see"""
+    # Ignore messages from the bot
+    if message.author == bot.user:
+        return
+
+    # Process commands first
+    await bot.process_commands(message)
+
+    # If the channel is not the designated names channel, return
+    if message.guild and message.channel.id:
+        names_channel_id, _, _ = get_channels(message.guild.id)
+        if names_channel_id and message.channel.id == names_channel_id:
+            # If there's a PDF attachment, process it automatically
+            for attachment in message.attachments:
+                if attachment.filename.lower().endswith('.pdf'):
+                    await process_pdf(message.channel, attachment, delete_message=False)
+                    # Don't delete the message immediately, wait until the file is processed
+                    # The message will be deleted by the process_pdf function
+                    return  # Return to prevent deleting the message here
+
+            # For non-PDF messages, delete after a delay
             try:
-                process_webhook_messages()
+                await asyncio.sleep(MESSAGE_DELETE_DELAY)  # Wait a moment
+                await message.delete()
             except Exception as e:
-                logger.error(f"Error in Discord monitor: {e}")
-            time.sleep(CHECK_INTERVAL)
-    except KeyboardInterrupt:
-        logger.info("Keyboard interrupt received, shutting down...")
-    
-    return 0
+                logger.error(f"Error deleting message: {str(e)}")
 
+
+# Start the bot if this script is run directly
 if __name__ == "__main__":
-    exit_code = main()
-    exit(exit_code)
+    print("Starting bot...")
+    print(f"Last updated: {LAST_UPDATED}")
+    print(f"User: {BOT_USER}")
+    print("Current Time (UTC): 2025-09-01 08:07:13")
+    print("Use Ctrl+C to stop")
+    bot.run(BOT_TOKEN)
