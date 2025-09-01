@@ -4,7 +4,7 @@
 Advanced Discord Bot with PDF Processing
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-01 08:07:13
+Last updated: 2025-09-01 08:23:12
 """
 
 import os
@@ -44,13 +44,13 @@ logger = logging.getLogger("discord_bot")
 
 # --- USER CONFIG (ALL IN ONE FILE) ---
 # Put your bot token here or in environment variable (recommended)
-BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "MTQxMTYwNzA3MTA1MjI3MTY2Ng.GQhNR4.yi80FMyGvGRDFxOGXwirMtMusn4zm9NFVim4HM")
+BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in environment variables
 
 # Premium command password
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-01 08:07:13"
+LAST_UPDATED = "2025-09-01 08:23:12"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -879,11 +879,23 @@ async def on_message(message):
                 logger.error(f"Error deleting message: {str(e)}")
 
 
-# Start the bot if this script is run directly
 if __name__ == "__main__":
+    # Check if the bot token is set
+    if not BOT_TOKEN:
+        print("ERROR: No bot token provided. Please set the DISCORD_BOT_TOKEN environment variable.")
+        sys.exit(1)
+        
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print("Current Time (UTC): 2025-09-01 08:07:13")
+    print("Current Time (UTC): 2025-09-01 08:23:12")
     print("Use Ctrl+C to stop")
-    bot.run(BOT_TOKEN)
+    
+    try:
+        bot.run(BOT_TOKEN)
+    except discord.errors.LoginFailure:
+        print("ERROR: Invalid bot token. Please check your DISCORD_BOT_TOKEN environment variable.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: Failed to start the bot: {e}")
+        sys.exit(1)
