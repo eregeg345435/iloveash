@@ -4,7 +4,7 @@
 Advanced Discord Bot with PDF Processing
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-01 09:48:32
+Last updated: 2025-09-01 09:56:03
 """
 
 import os
@@ -50,7 +50,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-01 09:48:32"
+LAST_UPDATED = "2025-09-01 09:56:03"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -69,6 +69,9 @@ HEADERS = {
     "Referer": "https://proswapper.xyz/",
     "Origin": "https://proswapper.xyz",
     "Connection": "keep-alive",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "DNT": "1",
 }
 
 # Default to 0 - will be set by the user with the setup command
@@ -126,6 +129,11 @@ def epic_lookup(value, mode=None, timeout=12.0):
         raise ValueError("mode must be 'name', 'id', or None")
 
     url = f"{API_BASE}/{mode}/{value}"
+    
+    # Try with different header combinations if one fails
+    error_messages = []
+    
+    # First attempt with full headers
     try:
         resp = requests.get(url, headers=HEADERS, timeout=timeout)
         resp.raise_for_status()
@@ -134,11 +142,46 @@ def epic_lookup(value, mode=None, timeout=12.0):
         if e.response.status_code == 404:
             # Account not found - it's inactive
             return {"status": "INACTIVE", "message": "Account not found or inactive"}
-        logger.error(f"HTTP error in epic_lookup: {e}")
-        return {"status": "ERROR", "message": f"HTTP error: {e}"}
-    except Exception as e:
-        logger.error(f"Error in epic_lookup: {e}")
-        return {"status": "ERROR", "message": f"Error: {e}"}
+        error_messages.append(f"Full headers: {str(e)}")
+        
+    # Second attempt with minimal headers
+    try:
+        minimal_headers = {
+            "User-Agent": HEADERS["User-Agent"],
+            "Accept": "application/json"
+        }
+        resp = requests.get(url, headers=minimal_headers, timeout=timeout)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            # Account not found - it's inactive
+            return {"status": "INACTIVE", "message": "Account not found or inactive"}
+        error_messages.append(f"Minimal headers: {str(e)}")
+        
+    # Third attempt with no headers
+    try:
+        resp = requests.get(url, timeout=timeout)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            # Account not found - it's inactive
+            return {"status": "INACTIVE", "message": "Account not found or inactive"}
+        error_messages.append(f"No headers: {str(e)}")
+    
+    # If we get here, all attempts failed
+    all_errors = "; ".join(error_messages)
+    logger.error(f"HTTP errors in epic_lookup: {all_errors}")
+    
+    # For 403 errors, return a more user-friendly message
+    if "403" in all_errors:
+        return {
+            "status": "ERROR", 
+            "message": "API access denied (403 Forbidden). The Epic Games API may be temporarily blocking requests."
+        }
+    
+    return {"status": "ERROR", "message": f"All API attempts failed: {all_errors}"}
 
 
 async def check_account_status(account_id):
@@ -576,6 +619,16 @@ async def send_pdf_analysis(ctx, info):
                     elif isinstance(link_data, str):
                         output += f"- {platform}: {link_data}\n"
                 output += "\n"
+            
+            # Include externalAuths if available
+            elif 'externalAuths' in status_data and status_data['externalAuths']:
+                output += "**Current Linked Accounts:**\n"
+                for platform, link_data in status_data['externalAuths'].items():
+                    if isinstance(link_data, dict) and 'externalDisplayName' in link_data:
+                        output += f"- {platform}: {link_data['externalDisplayName']}\n"
+                    elif isinstance(link_data, str):
+                        output += f"- {platform}: {link_data}\n"
+                output += "\n"
                 
         elif status_data.get('status') == 'INACTIVE':
             output += "**🔴 ACCOUNT CURRENTLY INACTIVE**\n"
@@ -663,6 +716,38 @@ async def on_ready():
     print(f"Bot is ready! Logged in as {bot.user.name}")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
+    
+    # Automatically authorize the first person who uses the bot
+    @bot.event
+    async def on_message(message):
+        if message.author == bot.user:
+            return
+            
+        if not authorized_users and not message.author.bot:
+            authorized_users.add(message.author.id)
+            try:
+                await message.author.send("✅ You've been automatically authorized for premium commands as the first user.")
+            except:
+                pass
+                
+        await bot.process_commands(message)
+        
+        # Process PDF attachments in the designated channel
+        if message.guild and message.channel.id:
+            names_channel_id, _, _ = get_channels(message.guild.id)
+            if names_channel_id and message.channel.id == names_channel_id:
+                # If there's a PDF attachment, process it automatically
+                for attachment in message.attachments:
+                    if attachment.filename.lower().endswith('.pdf'):
+                        await process_pdf(message.channel, attachment, delete_message=False)
+                        return  # Return to prevent deleting the message here
+
+                # For non-PDF messages, delete after a delay
+                try:
+                    await asyncio.sleep(MESSAGE_DELETE_DELAY)  # Wait a moment
+                    await message.delete()
+                except Exception as e:
+                    logger.error(f"Error deleting message: {str(e)}")
 
 
 @bot.command(name='setup')
@@ -776,11 +861,22 @@ async def lookup_command(ctx, value, mode=None):
             
             embed.add_field(name="Account ID", value=result.get('accountId', 'Unknown'), inline=False)
             
+            # Check different field names for linked accounts
             if 'externalAuths' in result and result['externalAuths']:
                 linked = []
                 for platform, data in result['externalAuths'].items():
                     if isinstance(data, dict) and 'externalDisplayName' in data:
                         linked.append(f"{platform}: {data['externalDisplayName']}")
+                    elif isinstance(data, str):
+                        linked.append(f"{platform}: {data}")
+                        
+                if linked:
+                    embed.add_field(name="Linked Accounts", value="\n".join(linked), inline=False)
+            elif 'links' in result and result['links']:
+                linked = []
+                for platform, data in result['links'].items():
+                    if isinstance(data, dict) and 'value' in data:
+                        linked.append(f"{platform}: {data['value']}")
                     elif isinstance(data, str):
                         linked.append(f"{platform}: {data}")
                         
@@ -875,36 +971,6 @@ async def custom_commands_help(ctx):
     await ctx.send(embed=embed)
 
 
-@bot.event
-async def on_message(message):
-    """Called when a message is sent to a channel the bot can see"""
-    # Ignore messages from the bot
-    if message.author == bot.user:
-        return
-
-    # Process commands first
-    await bot.process_commands(message)
-
-    # If the channel is not the designated names channel, return
-    if message.guild and message.channel.id:
-        names_channel_id, _, _ = get_channels(message.guild.id)
-        if names_channel_id and message.channel.id == names_channel_id:
-            # If there's a PDF attachment, process it automatically
-            for attachment in message.attachments:
-                if attachment.filename.lower().endswith('.pdf'):
-                    await process_pdf(message.channel, attachment, delete_message=False)
-                    # Don't delete the message immediately, wait until the file is processed
-                    # The message will be deleted by the process_pdf function
-                    return  # Return to prevent deleting the message here
-
-            # For non-PDF messages, delete after a delay
-            try:
-                await asyncio.sleep(MESSAGE_DELETE_DELAY)  # Wait a moment
-                await message.delete()
-            except Exception as e:
-                logger.error(f"Error deleting message: {str(e)}")
-
-
 if __name__ == "__main__":
     # Check if the bot token is set
     if not BOT_TOKEN:
@@ -914,7 +980,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print("Current Time (UTC): 2025-09-01 09:48:32")
+    print("Current Time (UTC): 2025-09-01 09:56:03")
     print("Use Ctrl+C to stop")
     
     try:
