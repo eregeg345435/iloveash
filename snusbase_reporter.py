@@ -1487,7 +1487,7 @@ async def custom_commands_help(ctx):
                         value="Show version information for the bot",
                         inline=False)
 
-                embed.add_field(name="!commands",
+        embed.add_field(name="!commands",
                         value="Show this help message",
                         inline=False)
 
@@ -1507,7 +1507,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 08:25:16")
+    print(f"Current Time (UTC): 2025-09-02 08:38:29")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
