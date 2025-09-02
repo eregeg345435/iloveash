@@ -5,7 +5,7 @@ Advanced Discord Bot with PDF Processing and Snusbase Integration
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
 - Processes Twitter usernames through Snusbase API (Premium Command)
-Last updated: 2025-09-02 13:11:30
+Last updated: 2025-09-02 13:24:29
 """
 
 import os
@@ -54,7 +54,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-02 13:11:30"
+LAST_UPDATED = "2025-09-02 13:24:29"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -1433,9 +1433,9 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
                 for page in pdf_reader.pages:
                     pdf_writer.add_page(page)
 
-                try:
+                                try:
                     # Create a temporary file for the unlocked PDF
-                                        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
+                    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
                         # Write the unlocked PDF to the temporary file
                         pdf_writer.write(temp_file)
 
@@ -1613,7 +1613,7 @@ async def on_ready():
     print(f"Bot is ready! Logged in as {bot.user.name}")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 13:16:04")
+    print(f"Current Time (UTC): 2025-09-02 13:30:23")
     
     # Start proxy maintenance task
     bot.loop.create_task(proxy_maintenance_task())
@@ -2228,9 +2228,9 @@ if __name__ == "__main__":
         sys.exit(1)
         
     print("Starting bot...")
-    print(f"Last updated: {LAST_UPDATED}")
-    print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 13:16:04")
+    print(f"Last updated: 2025-09-02 13:30:23")
+    print(f"User: eregeg345435")
+    print(f"Current Time (UTC): 2025-09-02 13:30:23")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
