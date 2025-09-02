@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Advanced Discord Bot with PDF Processing
+Advanced Discord Bot with PDF Processing and Snusbase Integration
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-02 08:11:37
+- Processes Twitter usernames through Snusbase API (Premium Command)
+Last updated: 2025-09-02 09:29:15
 """
 
 import os
@@ -20,6 +21,7 @@ import random
 import threading
 from typing import List, Dict, Tuple, Union, Optional
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 import discord
 from discord.ext import commands
@@ -52,7 +54,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-02 08:11:37"
+LAST_UPDATED = "2025-09-02 09:29:15"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -110,6 +112,14 @@ authorized_users = set()
 
 # Set to track already processed account IDs to prevent duplicates
 processed_account_ids = set()
+
+# Snusbase API config
+SNUSBASE_API_KEY = "sb3afud8h893krzzy8ec9r6s5m7u7n"
+API_URL = "https://api.snusbase.com/data/search"
+IP_WHOIS_URL = "https://api.snusbase.com/tools/ip-whois"
+BREACH_FILTER = "TWITTER_COM"
+CONCURRENCY = 8
+RATE_LIMIT_DELAY = 0.12
 
 # Try to load processed account IDs from file
 try:
@@ -299,10 +309,16 @@ def detect_platform_from_transactions(text):
     Detect platform (XBL, PSN, PC) from transaction data or text
     Returns platform code and display name.
     """
+    # First, look for exact matches from the screenshots
+    if re.search(r'addedExternalAuth\s*:\s*psn', text, re.IGNORECASE):
+        return 'PlayStation (PSN)', 'psn'
+    elif re.search(r'addedExternalAuth\s*:\s*xbl_xtoken', text, re.IGNORECASE):
+        return 'Xbox (XBL)', 'xbl_xtoken'
+    
     # Priority check for specific platform tokens
     if 'xbl_xtoken' in text.lower():
         return 'Xbox (XBL)', 'xbl_xtoken'
-    elif 'psn_xtoken' in text.lower():
+    elif 'psn_xtoken' in text.lower() or 'psn' in text.lower():
         return 'PlayStation (PSN)', 'psn_xtoken'
     elif 'nintendo' in text.lower():
         return 'Nintendo Switch', 'nintendo'
@@ -419,6 +435,125 @@ def save_processed_account_ids():
         logger.error(f"Error saving processed accounts: {e}")
 
 
+def detect_password_reset_pattern(transactions):
+    """
+    Detect the password reset pattern shown in screenshot 7
+    (PASSWORD_RESET_VIA_EMAIL, PASSWORD_RESET_CODE_GENERATED, EMAIL_CONFIRMATION_CODE_GENERATED, UPDATE)
+    """
+    if len(transactions) < 4:
+        return False
+        
+    # Track if we see the pattern in sequence
+    for i in range(len(transactions) - 3):
+        sequence = [t['type'] for t in transactions[i:i+4]]
+        
+        # Check for exact pattern or contains these elements
+        password_reset = any('PASSWORD_RESET' in s for s in sequence[:2])
+        email_confirmation = any('EMAIL_CONFIRMATION' in s for s in sequence[1:3])
+        update = any('UPDATE' in s for s in sequence[2:4])
+        
+        if password_reset and email_confirmation and update:
+            # Check if all transactions happened on the same day
+            first_date = transactions[i]['date']
+            same_date = all(t['date'] == first_date for t in transactions[i+1:i+4])
+            
+            if same_date:
+                return True
+                
+    return False
+
+
+def extract_display_name_changes(text):
+    """
+    Extract display name changes from UPDATE transaction details
+    Based on screenshot 9 format
+    """
+    names = []
+    
+    # Look for displayName fields in the UPDATE transaction
+    display_name_pattern = r'displayName\s*:\s*"([^"]+)"'
+    matches = re.finditer(display_name_pattern, text)
+    for match in matches:
+        name = match.group(1)
+        if name and name not in names:
+            names.append(name)
+            
+    # Look for specific format from screenshot 9
+    specific_format_pattern = r'lowerCaseDisplayName\s*:\s*"([^"]+)"'
+    matches = re.finditer(specific_format_pattern, text)
+    for match in matches:
+        name = match.group(1)
+        if name and name not in names:
+            names.append(name)
+            
+    # Extract the number of display name changes
+    changes_count_pattern = r'numberOfDisplayNameChanges\s*:\s*"(\d+)"'
+    count_match = re.search(changes_count_pattern, text)
+    
+    count = 0
+    if count_match:
+        try:
+            count = int(count_match.group(1))
+        except ValueError:
+            pass
+            
+    return names, count
+
+
+def detect_compromised_account_markers(text, transactions):
+    """
+    Detect markers that indicate a compromised account based on screenshots
+    """
+    # Check for DISABLED_REASON: Compromised (screenshot 8)
+    compromised_reason = re.search(r'DISABLED_REASON\s*:\s*Compromised', text, re.IGNORECASE)
+    if compromised_reason:
+        return True
+        
+    # Check for HISTORY_ACCOUNT_RECOVERY transactions (screenshot 10)
+    for transaction in transactions:
+        if 'RECOVERY' in transaction['type']:
+            return True
+        if 'METADATA_ADD' in transaction['type'] and 'DISABLED_REASON' in transaction['details'] and 'Compromised' in transaction['details']:
+            return True
+            
+    # Check for password reset pattern
+    if detect_password_reset_pattern(transactions):
+        return True
+        
+    return False
+
+
+def extract_account_recovery_info(text):
+    """
+    Extract account recovery information from transaction text
+    Based on screenshot 10
+    """
+    recovery_count = 0
+    email_verified = False
+    recovery_email = None
+    
+    # Check for recovery count
+    count_match = re.search(r'numberOfAccountRecoveries\s*:\s*"(\d+)"\s*=>\s*"(\d+)"', text)
+    if count_match:
+        try:
+            # Use the "after" value in the => pattern
+            recovery_count = int(count_match.group(2))
+        except ValueError:
+            pass
+            
+    # Check for email verification status
+    verified_match = re.search(r'emailVerified\s*:\s*"(\w+)"', text)
+    if verified_match:
+        email_verified = verified_match.group(1).lower() == 'true'
+        
+    # Extract email if available
+    email_match = re.search(r'email\s*:\s*"([^"]+@[^"]+)"', text)
+    if email_match:
+        recovery_email = email_match.group(1)
+        
+    return recovery_count, email_verified, recovery_email
+
+
 def extract_user_info_from_text(text):
     """Extract user information from PDF text"""
     info = {
@@ -436,17 +571,23 @@ def extract_user_info_from_text(text):
         'disable_count': 0,
         'disable_dates': [],
         'reactivated': False,
+        'reactivate_count': 0,
         'reactivate_dates': [],
         'deactivated': False,
         'email_changed': False,
         'compromised_account': False,
         'display_names': [],
+        'display_name_changes': 0,
         'first_name': None,
         'last_name': None,
         'all_emails': [],
         'source_file': None,  # To store the source file name
         'is_encrypted': False,  # To track if the PDF was encrypted
-        'account_status': None  # To store the account status from the API
+        'account_status': None,  # To store the account status from the API
+        'password_reset_pattern': False,  # To track if password reset pattern is detected
+        'account_recovered': False,  # To track if account was recovered
+        'recovery_count': 0,  # Number of account recoveries
+        'recovery_email_verified': False  # Whether recovery email was verified
     }
 
     # Look for file name in the text
@@ -522,41 +663,42 @@ def extract_user_info_from_text(text):
             info['creation_date'] = date_match.group(1)
             break
 
-    # Look for external auth tokens and platform info
-    auth_patterns = [
-        r'addedExternalAuth[:\s]+([^\s\n]+)',  # addedExternalAuth: xbl_xtoken
-        r'externalAuth[:\s]+([^\s\n]+)',       # externalAuth: psn_xtoken
-        r'platform[:\s]+([^\n]+)',             # Platform: PlayStation (PSN)
-        r'\b(psn_xtoken|xbl_xtoken|epic)\b'    # Direct token mentions
+    # Look for external auth tokens and platform info based on the screenshots
+    platform_patterns = [
+        r'HISTORY_ACCOUNT_EXTERNAL_AUTH_ADD\s+\d{1,2}/\d{1,2}/\d{4}\s+addedExternalAuth\s*:\s*(psn|xbl_xtoken)',
+        r'addedExternalAuth\s*:\s*(psn|xbl_xtoken)',
+        r'externalAuth\s*:\s*(psn_xtoken|xbl_xtoken|epic)',
+        r'platform\s*:\s*([^\n]+)'
     ]
     
-    # First, collect all possible platform mentions in the text
-    platform_mentions = []
-    for pattern in auth_patterns:
-        matches = re.finditer(pattern, text, re.IGNORECASE)
-        for match in matches:
-            token = match.group(1).strip().lower()
-            platform_mentions.append(token)
-    
-    # Determine the platform from collected mentions
-    if any('xbl_xtoken' in mention for mention in platform_mentions):
-        info['platform'] = 'Xbox (XBL)'
-        info['platform_token'] = 'xbl_xtoken'
-    elif any('psn_xtoken' in mention for mention in platform_mentions):
-        info['platform'] = 'PlayStation (PSN)'
-        info['platform_token'] = 'psn_xtoken'
-    elif any('nintendo' in mention for mention in platform_mentions):
-        info['platform'] = 'Nintendo Switch'
-        info['platform_token'] = 'nintendo'
-    elif any('epic' in mention or 'pc' in mention for mention in platform_mentions):
-        info['platform'] = 'PC/Epic Games'
-        info['platform_token'] = 'epic'
-    else:
-        # Fallback to platform field detection if no tokens found
-        platform_match = re.search(r'Platform:?\s*([^\n]+)', text, re.IGNORECASE)
+    # Look for platform info using the patterns
+    for pattern in platform_patterns:
+        platform_match = re.search(pattern, text, re.IGNORECASE)
         if platform_match:
-            platform_text = platform_match.group(1).strip().lower()
-            platform, token = detect_platform_from_transactions(platform_text)
+            platform_token = platform_match.group(1).strip().lower()
+            
+            # Determine platform from token
+            if 'xbl' in platform_token:
+                info['platform'] = 'Xbox (XBL)'
+                info['platform_token'] = 'xbl_xtoken'
+                break
+            elif 'psn' in platform_token:
+                info['platform'] = 'PlayStation (PSN)'
+                info['platform_token'] = 'psn_xtoken' if 'xtoken' in platform_token else 'psn'
+                break
+            elif 'epic' in platform_token or 'pc' in platform_token:
+                info['platform'] = 'PC/Epic Games'
+                info['platform_token'] = 'epic'
+                break
+            elif 'nintendo' in platform_token:
+                info['platform'] = 'Nintendo Switch'
+                info['platform_token'] = 'nintendo'
+                break
+    
+    # If no platform found from specific patterns, use the general detection
+    if not info['platform']:
+        platform, token = detect_platform_from_transactions(text)
+        if platform != 'Unknown':
             info['platform'] = platform
             info['platform_token'] = token
 
@@ -602,7 +744,7 @@ def extract_user_info_from_text(text):
         # Standard format with HISTORY_ACCOUNT_ prefix
         r'HISTORY_ACCOUNT_([A-Z_]+)\s+(\d{1,2}/\d{1,2}/\d{2,4})\s+(.+?)(?=\n|$)',
         
-        # Looking specifically for addedExternalAuth entries (like in image 4)
+        # Looking specifically for addedExternalAuth entries (like in screenshots)
         r'(\d{1,2}/\d{1,2}/\d{4})\s+(addedExternalAuth)\s*:\s*([^\n]+)',
         
         # Any date followed by action that might be relevant
@@ -640,9 +782,20 @@ def extract_user_info_from_text(text):
 
             if 'REACTIVE' in transaction_type or 'REENABLE' in transaction_type or 'ENABLED' in transaction_type:
                 info['reactivated'] = True
+                info['reactivate_count'] += 1
                 info['reactivate_dates'].append(date)
 
-            # Check for compromised account pattern
+            # Process RECOVERY transactions (screenshot 10)
+            if 'RECOVERY' in transaction_type:
+                info['account_recovered'] = True
+                recovery_count, email_verified, recovery_email = extract_account_recovery_info(details)
+                info['recovery_count'] = max(info['recovery_count'], recovery_count)
+                info['recovery_email_verified'] = info['recovery_email_verified'] or email_verified
+                info['compromised_account'] = True
+                if recovery_email and recovery_email not in info['all_emails']:
+                    info['all_emails'].append(recovery_email)
+                    
+            # Check for METADATA_ADD with DISABLED_REASON: Compromised (screenshot 8)
             if 'METADATA_ADD' in transaction_type and 'DISABLED_REASON' in details and 'Compromised' in details:
                 info['compromised_account'] = True
                 
@@ -652,15 +805,33 @@ def extract_user_info_from_text(text):
                 if 'xbl_xtoken' in details.lower():
                     info['platform'] = 'Xbox (XBL)'
                     info['platform_token'] = 'xbl_xtoken'
-                elif 'psn_xtoken' in details.lower():
+                elif 'psn_xtoken' in details.lower() or 'psn' in details.lower():
                     info['platform'] = 'PlayStation (PSN)'
-                    info['platform_token'] = 'psn_xtoken'
+                    info['platform_token'] = 'psn_xtoken' if 'xtoken' in details.lower() else 'psn'
                 elif 'nintendo' in details.lower():
                     info['platform'] = 'Nintendo Switch'
                     info['platform_token'] = 'nintendo'
                 elif any(t in details.lower() for t in ['pc', 'epic']):
                     info['platform'] = 'PC/Epic Games'
                     info['platform_token'] = 'epic'
+
+            # Process UPDATE transactions for username changes (screenshot 9)
+            if 'UPDATE' in transaction_type:
+                names, count = extract_display_name_changes(details)
+                if count > 0:
+                    info['display_name_changes'] = max(info['display_name_changes'], count)
+                
+                for name in names:
+                    if name not in info['display_names']:
+                        info['display_names'].append(name)
+
+            # Track username changes from NAME_CHANGE transactions
+            if 'NAME_CHANGE' in transaction_type:
+                # Try to extract the new username from details
+                name_match = re.search(r'to\s+([^\s\n]+)', details, re.IGNORECASE)
+                if name_match and name_match.group(1) not in info['display_names']:
+                    info['display_names'].append(name_match.group(1))
+                    info['display_name_changes'] += 1
 
             info['transactions'].append({
                 'type': transaction_type,
@@ -675,7 +846,394 @@ def extract_user_info_from_text(text):
             info['platform'] = platform
             info['platform_token'] = token
 
+    # Check for the password reset pattern from screenshot 7
+    info['password_reset_pattern'] = detect_password_reset_pattern(info['transactions'])
+    if info['password_reset_pattern']:
+        info['email_changed'] = True  # Likely indicates email change
+        
+    # Check for compromised account markers across transactions and details
+    if detect_compromised_account_markers(text, info['transactions']):
+        info['compromised_account'] = True
+        
+    # Make sure display_name_changes reflects the length of display_names if not explicitly set
+    if info['display_name_changes'] == 0 and len(info['display_names']) > 1:
+        info['display_name_changes'] = len(info['display_names']) - 1
+
     return info
+
+
+# Snusbase API Functions
+def extract_handle(link: str, domain: str) -> str:
+    """Extract a handle from a social media link"""
+    try:
+        handle = link.split(f"{domain}/")[-1]
+        handle = handle.split('?')[0].split('#')[0].rstrip('/').strip()
+        return handle
+    except Exception:
+        return ""
+
+
+def load_users_from_text(text: str) -> List[Dict[str, str]]:
+    """Parse user data from text content"""
+    users = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        parts = [x.strip() for x in line.strip().split("|")]
+        if len(parts) >= 2:
+            username_tag = parts[0]
+            twitter_link = parts[1]
+            twitch_link = parts[2] if len(parts) > 2 else ""
+
+            if "#" in username_tag:
+                username, discriminator = username_tag.split("#", 1)
+            else:
+                username, discriminator = username_tag, ""
+
+            users.append({
+                "username": username,
+                "discriminator": discriminator,
+                "twitter_link": twitter_link,
+                "twitch_link": twitch_link
+            })
+    return users
+
+
+def query_snusbase_api(term, search_type, max_retries=4, backoff_factor=1.5):
+    """Query the Snusbase API"""
+    headers = {"Auth": SNUSBASE_API_KEY, "Content-Type": "application/json"}
+    data = {"terms": [term], "types": [search_type]}
+    attempt = 0
+
+    while attempt < max_retries:
+        try:
+            resp = requests.post(API_URL, headers=headers, json=data, timeout=15)
+            logger.debug(f"Snusbase API [{search_type}] {term} status={resp.status_code}")
+
+            if resp.status_code == 401:
+                logger.error("ERROR: Snusbase API key unauthorized!")
+                break
+
+            resp.raise_for_status()
+            resp_json = resp.json()
+
+            all_results = []
+            for db, entries in resp_json.get("results", {}).items():
+                for entry in entries:
+                    entry["breach"] = db
+                    all_results.append(entry)
+            return all_results
+
+        except requests.exceptions.HTTPError as e:
+            if resp.status_code == 503:
+                wait_time = backoff_factor ** attempt
+                time.sleep(wait_time)
+                attempt += 1
+                continue
+            logger.error(f"HTTP error for {search_type} {term}: {str(e)}")
+            break
+
+        except Exception as e:
+            logger.error(f"API error for {search_type} {term}: {str(e)}")
+            break
+
+    return []
+
+
+def lookup_ip_location(ip_list):
+    """Look up location information for IP addresses"""
+    if not ip_list:
+        return None
+    headers = {"Auth": SNUSBASE_API_KEY, "Content-Type": "application/json"}
+    data = {"terms": ip_list}
+
+    try:
+        resp = requests.post(IP_WHOIS_URL, headers=headers, json=data, timeout=15)
+        logger.debug(f"IP WHOIS status {resp.status_code}")
+        resp.raise_for_status()
+
+        results = resp.json().get("results", {})
+        locations = []
+
+        for ip, info in results.items():
+            city = info.get("city", "")
+            region = info.get("regionName", "")
+            country = info.get("country", "")
+
+            if city or region or country:
+                loc = ", ".join(filter(None, [city, region, country]))
+                locations.append(loc)
+
+        if not locations:
+            return None
+        return max(set(locations), key=locations.count)
+
+    except Exception as e:
+        logger.error(f"IP WHOIS lookup error: {str(e)}")
+        return None
+
+
+async def _first_pass_one(user: Dict[str, str]) -> Tuple[str, Dict[str, str], List[str]]:
+    """Process a single user in the first pass"""
+    ident = f"{user['username']}#{user['discriminator']}"
+    handle = extract_handle(user.get("twitter_link", ""), "twitter.com")
+
+    if not handle:
+        return ident, {"status": "SKIP", "reason": "no twitter handle",
+                       "twitter_link": user.get("twitter_link", "")}, []
+
+    # Let asyncio breathe
+    await asyncio.sleep(0)
+
+    start_time = time.time()
+    results = query_snusbase_api(handle, "username")
+    elapsed = time.time() - start_time
+    logger.debug(f"Lookup for {handle} took {elapsed:.2f} seconds")
+
+    emails = []
+    for entry in results:
+        breach_name = entry.get("breach", "")
+        email_val = entry.get("email", "")
+        logger.debug(f"Entry: {entry}")
+        logger.debug(f"Breach: {breach_name}, Email: {email_val}")
+
+        if BREACH_FILTER and BREACH_FILTER.lower() not in breach_name.lower():
+            continue
+        if not email_val:
+            continue
+        emails.append(email_val)
+
+    if not emails:
+        return ident, {"status": "NO_RESULTS", "twitter_handle": handle}, []
+
+    # Only return summary, not emails for progress reporting
+    return ident, {"status": "OK", "twitter_handle": handle, "emails_collected": "[hidden]"}, emails
+
+
+async def _second_pass_one(email: str, attached_users: List[Dict[str, str]]) -> List[Tuple[str, dict]]:
+    """Process a single email in the second pass"""
+    # Let asyncio breathe
+    await asyncio.sleep(0)
+
+    results = query_snusbase_api(email, "email")
+    logger.debug(f"RAW API RESPONSE FOR {email}: {results}")
+
+    ip_candidates, usernames, birthdates = [], [], []
+    for res in results:
+        lastip = res.get("lastip", "")
+        regip = res.get("regip", "")
+
+        if lastip:
+            ip_candidates.append(lastip)
+        if regip:
+            ip_candidates.append(regip)
+
+        uname = res.get("username", "")
+        if uname:
+            usernames.append(uname)
+
+        bdate = res.get("birthdate", "") or res.get("birthday", "")
+        if bdate:
+            birthdates.append(bdate)
+
+    ip_candidates = list(set(ip_candidates))
+    location = lookup_ip_location(ip_candidates)
+
+    most_common_username = max(set(usernames), key=usernames.count) if usernames else "NA"
+    birthdate_out = birthdates[0] if birthdates else "NA"
+    ips_out = ", ".join(sorted(ip_candidates)) if ip_candidates else "NA"
+    location_out = location if location else "NA"
+
+    outs = []
+    for info in attached_users:
+        twitter_handle = extract_handle(info.get("twitter_link", ""), "twitter.com") or "NA"
+        out = {
+            "status": "OK",
+            "user": f"{info['username']}#{info['discriminator']}",
+            "twitter": info["twitter_link"],
+            "twitch": info["twitch_link"],
+            "email": email,
+            "ips_found": ips_out,
+            "most_common_ip_location": location_out,
+            "most_common_username": most_common_username,
+            "twitter_username": twitter_handle,
+            "birthdate": birthdate_out,
+        }
+        outs.append((email, out))
+    return outs
+
+
+def format_final_output(all_results: List[dict]) -> str:
+    """Format all results into a final output string"""
+    lines = []
+    lines.append("Snusbase Email Search Results\n====================================\n")
+    for res in all_results:
+        lines.append(json.dumps(res, ensure_ascii=False, indent=2))
+        lines.append("------------------------------------")
+    lines.append("====================================")
+    return "```json\n" + "\n".join(lines) + "\n```"
+
+
+async def first_pass_with_channels(users: List[Dict[str, str]], pre_search_channel, post_search_channel) -> Dict[
+    str, List[Dict[str, str]]]:
+    """First pass with specific channels"""
+    if not pre_search_channel:
+        logger.error("Pre-search channel not found")
+        return {}
+
+    email_user_map: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+    total = len(users)
+
+    # Send initial message
+    start_message = await pre_search_channel.send(f"Starting username scan — 0/{total}")
+
+    results_by_idx = {}
+
+    # Process users in smaller batches to avoid blocking the bot
+    for idx, user in enumerate(users, 1):
+        try:
+            # Update progress every 5 users
+            if idx % 5 == 0 or idx == 1 or idx == total:
+                await pre_search_channel.send(
+                    f"Going through {idx}/{total}: `{user['username']}#{user['discriminator']}`")
+
+            ident, result, emails = await _first_pass_one(user)
+
+            # Report result
+            status = result.get("status", "").upper()
+            text = f"Status: {status}"
+            if status == "OK":
+                text += " (emails found)"
+            elif status == "NO_RESULTS":
+                text += " (no results)"
+            elif status == "SKIP":
+                text += " (skipped)"
+
+            await pre_search_channel.send(f"Result for `{ident}`:\n{text}")
+
+            # Store emails for second pass
+            for email in emails:
+                email_user_map[email].append({
+                    "username": user['username'],
+                    "discriminator": user['discriminator'],
+                    "twitter_link": user['twitter_link'],
+                    "twitch_link": user['twitch_link'],
+                })
+
+            # Avoid rate limits
+            await asyncio.sleep(RATE_LIMIT_DELAY)
+
+        except Exception as e:
+            logger.error(f"Error processing user {user['username']}: {str(e)}")
+            await pre_search_channel.send(f"Error processing `{user['username']}`: {str(e)}")
+
+    # Send completion message
+    await pre_search_channel.send(f"✅ Completed username scan\n- Total: {total}\n- Found emails: {len(email_user_map)}")
+
+    return email_user_map
+
+
+async def second_pass_with_channels(email_user_map: Dict[str, List[Dict[str, str]]], pre_search_channel,
+                                    post_search_channel) -> List[dict]:
+    """Second pass with specific channels"""
+    if not pre_search_channel or not post_search_channel:
+        logger.error(f"Required channels not found")
+        return []
+
+    all_emails = list(email_user_map.keys())
+    total = len(all_emails)
+    all_results = []
+
+    # Send initial message
+    await pre_search_channel.send(f"Starting email search — 0/{total}")
+
+    # Process emails in smaller batches to avoid blocking the bot
+    for idx, email in enumerate(all_emails, 1):
+        try:
+            # Update progress every 5 emails
+            if idx % 5 == 0 or idx == 1 or idx == total:
+                await pre_search_channel.send(f"Going through {idx}/{total}: `{email}`")
+
+            outs = await _second_pass_one(email, email_user_map[email])
+
+            # Report results
+            for _, data in outs:
+                text = "```json\n" + json.dumps(data, ensure_ascii=False, indent=2) + "\n```"
+                await pre_search_channel.send(f"Result for `{email}`:\n{text}")
+                all_results.append(data)
+
+            # Avoid rate limits
+            await asyncio.sleep(RATE_LIMIT_DELAY)
+
+        except Exception as e:
+            logger.error(f"Error processing email {email}: {str(e)}")
+            await pre_search_channel.send(f"Error processing `{email}`: {str(e)}")
+
+    # Send completion message to pre-search channel
+    await pre_search_channel.send(f"✅ Completed email search\n- Total: {total}\n- Results found: {len(all_results)}")
+
+    # Send final formatted output to post-search channel
+    final_info = format_final_output(all_results)
+
+    # Split into chunks if needed (Discord has a 2000 char limit)
+    chunks = [final_info[i:i + 1990] for i in range(0, len(final_info), 1990)]
+    for chunk in chunks:
+        await post_search_channel.send(chunk)
+
+    return all_results
+
+
+async def process_message_content(message_content: str, guild_id=None, ctx=None, author_id=None):
+    """Process user data from message content"""
+    # Check if user is authorized (for channel submissions)
+    if author_id and author_id not in authorized_users:
+        if ctx:
+            await ctx.send("⚠️ This is a premium command. Please use `!authorize [password]` first.")
+        return
+        
+    async with processing_lock:
+        try:
+            # Get the configured channels
+            if guild_id:
+                _, pre_search_channel_id, post_search_channel_id = get_channels(guild_id)
+                pre_search_channel = bot.get_channel(pre_search_channel_id)
+                post_search_channel = bot.get_channel(post_search_channel_id)
+            else:
+                pre_search_channel = post_search_channel = None
+                if ctx:
+                    pre_search_channel = post_search_channel = ctx.channel
+
+            if not pre_search_channel or not post_search_channel:
+                if ctx:
+                    await ctx.send("Channels not configured. Please use the !setup command first.")
+                return
+
+            # Parse users from the text content
+            users = load_users_from_text(message_content)
+            if not users:
+                response = "No valid users found in message content. Format should be:\n`Username#Tag | https://twitter.com/handle | https://twitch.tv/handle`"
+                if ctx:
+                    await ctx.send(response)
+                return
+
+            # Send acknowledgment
+            if ctx:
+                await ctx.send(f"Processing {len(users)} users...")
+
+            # Run first pass
+            email_user_map = await first_pass_with_channels(users, pre_search_channel, post_search_channel)
+            if not email_user_map:
+                if ctx:
+                    await ctx.send("No emails collected in first pass.")
+                return
+
+            # Run second pass
+            await second_pass_with_channels(email_user_map, pre_search_channel, post_search_channel)
+
+        except Exception as e:
+            logger.error(f"Error processing message: {str(e)}")
+            if ctx:
+                await ctx.send(f"Error processing message: {str(e)}")
 
 
 async def process_pdf(ctx, attachment, password=None, delete_message=True):
@@ -883,15 +1441,15 @@ async def send_pdf_analysis(ctx, info):
     if info['display_names']:
         display_names_text = ", ".join(info['display_names'])
         output += f"**Display Names:** {display_names_text}\n"
-        if len(info['display_names']) > 1:
-            output += f"Changed: {len(info['display_names']) - 1}\n"
+        if info['display_name_changes'] > 0:
+            output += f"Changed: {info['display_name_changes']} time(s)\n"
     
     # Current Email
     if info['email']:
         output += f"**Current Email:** {info['email']}\n"
     
     # Account ID
-    if info['account_id']:
+        if info['account_id']:
         output += f"**Account ID:** {info['account_id']}\n"
     
     # Creation Date
@@ -913,12 +1471,18 @@ async def send_pdf_analysis(ctx, info):
     output += "\n**Account Status History:** "
     if info['account_disabled']:
         output += f"Disabled {info['disable_count']} time(s)"
+        if info['reactivated']:
+            output += f", Reactivated {info['reactivate_count']} time(s)"
         if info['compromised_account']:
             output += ", **COMPROMISED ACCOUNT DETECTED**"
         if info['deactivated']:
             output += ", Deactivated (metadata added)"
-        if info['reactivated']:
-            output += ", Reactivated (metadata removed)"
+        if info['password_reset_pattern']:
+            output += ", **PASSWORD RESET PATTERN DETECTED**"
+        if info['email_changed']:
+            output += ", Email Changed"
+        if info['account_recovered']:
+            output += f", Account Recovered ({info['recovery_count']} time(s))"
     else:
         output += "No disable/reactivation history found"
     
@@ -1007,26 +1571,31 @@ async def on_message(message):
             await message.delete()
         except:
             pass
+    
+    # Process channel messages for Snusbase
+    if message.guild and message.channel.id:
+        names_channel_id, pre_search_channel_id, post_search_channel_id = get_channels(message.guild.id)
+        
+        # Auto-process messages in the names channel
+        if names_channel_id and message.channel.id == names_channel_id:
+            # Check if the message contains a PDF attachment
+            has_pdf = any(attachment.filename.lower().endswith('.pdf') for attachment in message.attachments)
+            
+            if has_pdf:
+                # Process PDF attachments
+                for attachment in message.attachments:
+                    if attachment.filename.lower().endswith('.pdf'):
+                        await process_pdf(message.channel, attachment, delete_message=False)
+                        break  # Only process the first PDF
+            elif message.content and '|' in message.content:
+                # This looks like a Snusbase processing request (username | twitter | twitch format)
+                if message.author.id in authorized_users:
+                    await process_message_content(message.content, message.guild.id, None, message.author.id)
+                else:
+                    await message.channel.send(f"{message.author.mention}, this feature requires premium access. Please use `!authorize [password]` first.")
 
     # Process commands
     await bot.process_commands(message)
-
-    # Process PDF attachments in the designated channel
-    if message.guild and message.channel.id:
-        names_channel_id, _, _ = get_channels(message.guild.id)
-        if names_channel_id and message.channel.id == names_channel_id:
-            # If there's a PDF attachment, process it automatically
-            for attachment in message.attachments:
-                if attachment.filename.lower().endswith('.pdf'):
-                    await process_pdf(message.channel, attachment, delete_message=False)
-                    return  # Return to prevent deleting the message here
-
-            # For non-PDF messages, delete after a delay
-            try:
-                await asyncio.sleep(MESSAGE_DELETE_DELAY)  # Wait a moment
-                await message.delete()
-            except Exception as e:
-                logger.error(f"Error deleting message: {str(e)}")
 
 
 @bot.command(name='setup')
@@ -1299,6 +1868,21 @@ async def lookup_command(ctx, *, query=None):
         await lookup_msg.edit(content=f"❌ Error processing API response: {str(e)}")
 
 
+@bot.command(name='snusbase')
+async def snusbase_command(ctx, *, content=None):
+    """Process Twitter/Twitch data through Snusbase (Premium Command)"""
+    # Check premium access
+    if not await check_premium_access(ctx):
+        return
+        
+    if not content:
+        await ctx.send("Please provide user data in the format: `Username#Tag | https://twitter.com/handle | https://twitch.tv/handle`")
+        return
+        
+    # Process the content directly
+    await process_message_content(content, ctx.guild.id, ctx, ctx.author.id)
+
+
 @bot.command(name='testproxies')
 async def test_proxies_command(ctx):
     """Test all proxies and show which ones work"""
@@ -1452,8 +2036,8 @@ async def custom_commands_help(ctx):
     embed.set_footer(text=f"Bot Last Updated: {LAST_UPDATED}")
 
     embed.add_field(name="!pdf [password]",
-                    value="Process an attached PDF file to extract user information"
-                    "(Optional password if the PDF is encrypted)",
+                    value="Process an attached PDF file to extract user information\n"
+                          "(Optional password if the PDF is encrypted)",
                     inline=False)
                     
     if ctx.author.id in authorized_users:
@@ -1464,6 +2048,11 @@ async def custom_commands_help(ctx):
                               "- `!lookup 1234567890abcdef1234567890abcdef` - Look up by ID",
                         inline=False)
         
+        embed.add_field(name="!snusbase [data]",
+                        value="Process Twitter/Twitch data through Snusbase\n"
+                              "Format: `Username#Tag | https://twitter.com/handle | https://twitch.tv/handle`",
+                        inline=False)
+                        
         embed.add_field(name="!testproxies",
                         value="Test all proxies to see which ones are working",
                         inline=False)
@@ -1507,7 +2096,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 08:51:28")
+    print(f"Current Time (UTC): 2025-09-02 09:33:51")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
