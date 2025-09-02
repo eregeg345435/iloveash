@@ -4,7 +4,7 @@
 Advanced Discord Bot with PDF Processing
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-02 05:37:54
+Last updated: 2025-09-02 05:47:18
 """
 
 import os
@@ -52,7 +52,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-02 05:37:54"
+LAST_UPDATED = "2025-09-02 05:47:18"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -827,10 +827,53 @@ async def send_pdf_analysis(ctx, info):
     # Get the source filename
     source_file = info.get('source_file', 'Unknown')
 
-    # Start with the header
+    # Start with the header and account status (MOVED TO THE TOP)
     output = "**📊 ACCOUNT ANALYSIS**\n\n"
     
-    # First show information extracted from the PDF
+    # FIRST check current account status and include it at the TOP of the message
+    if info.get('account_status'):
+        status_data = info['account_status']
+        
+        if isinstance(status_data, dict) and status_data.get('status') == 'ACTIVE':
+            output += "**🟢 ACCOUNT CURRENTLY ACTIVE**\n"
+            
+            # Include current display name if available
+            if 'displayName' in status_data:
+                output += f"**Current Display Name:** {status_data['displayName']}\n"
+            elif 'display_name' in status_data:
+                output += f"**Current Display Name:** {status_data['display_name']}\n"
+                
+            # Include links if available
+            if 'externalAuths' in status_data and status_data['externalAuths']:
+                output += "**Current Linked Accounts:**\n"
+                for platform, data in status_data['externalAuths'].items():
+                    if isinstance(data, dict):
+                        output += f"- {platform}: {data.get('externalDisplayName', 'N/A')}\n"
+                    else:
+                        output += f"- {platform}: {str(data)}\n"
+                output += "\n"
+                
+        elif isinstance(status_data, dict) and status_data.get('status') == 'INACTIVE':
+            output += "**🔴 ACCOUNT CURRENTLY INACTIVE**\n"
+            if 'message' in status_data:
+                output += f"{status_data['message']}\n"
+            output += "The account may have been banned, deleted, or changed username.\n\n"
+            
+        elif isinstance(status_data, dict) and status_data.get('status') in ['ERROR', 'FORBIDDEN']:
+            output += "**⚠️ ERROR CHECKING ACCOUNT STATUS**\n"
+            if 'message' in status_data:
+                output += f"{status_data['message']}\n\n"
+        
+        elif isinstance(status_data, dict) and status_data.get('status') == 'INVALID':
+            output += "**⚠️ INVALID ACCOUNT ID FORMAT**\n"
+            if 'message' in status_data:
+                output += f"{status_data['message']}\n\n"
+    else:
+        # Make sure we always show status even if API check failed
+        output += "**⚠️ ACCOUNT STATUS UNKNOWN**\n"
+        output += "Could not check current account status.\n\n"
+    
+    # THEN show information extracted from the PDF
     output += f"**Information extracted from:** {source_file}\n\n"
     
     # Display Names with count if multiple
@@ -876,51 +919,8 @@ async def send_pdf_analysis(ctx, info):
     else:
         output += "No disable/reactivation history found"
     
-    # Send the primary information
+    # Send the complete information in one message
     await ctx.send(output)
-
-    # Send current account status in a separate message for better visibility
-    if info.get('account_status'):
-        status_data = info['account_status']
-        current_status = ""
-        
-        if isinstance(status_data, dict) and status_data.get('status') == 'ACTIVE':
-            current_status += "**🟢 ACCOUNT CURRENTLY ACTIVE**\n"
-            
-            # Include current display name if available
-            if 'displayName' in status_data:
-                current_status += f"**Current Display Name:** {status_data['displayName']}\n"
-            elif 'display_name' in status_data:
-                current_status += f"**Current Display Name:** {status_data['display_name']}\n"
-                
-            # Include links if available
-            if 'externalAuths' in status_data and status_data['externalAuths']:
-                current_status += "**Current Linked Accounts:**\n"
-                for platform, data in status_data['externalAuths'].items():
-                    if isinstance(data, dict) and 'externalDisplayName' in data:
-                        current_status += f"- {platform}: {data.get('externalDisplayName', 'N/A')}\n"
-                    elif isinstance(data, str):
-                        current_status += f"- {platform}: {data}\n"
-                
-        elif isinstance(status_data, dict) and status_data.get('status') == 'INACTIVE':
-            current_status += "**🔴 ACCOUNT CURRENTLY INACTIVE**\n"
-            if 'message' in status_data:
-                current_status += f"{status_data['message']}\n"
-            current_status += "The account may have been banned, deleted, or changed username."
-            
-        elif isinstance(status_data, dict) and status_data.get('status') in ['ERROR', 'FORBIDDEN']:
-            current_status += "**⚠️ ERROR CHECKING ACCOUNT STATUS**\n"
-            if 'message' in status_data:
-                current_status += f"{status_data['message']}"
-        
-        elif isinstance(status_data, dict) and status_data.get('status') == 'INVALID':
-            current_status += "**⚠️ INVALID ACCOUNT ID FORMAT**\n"
-            if 'message' in status_data:
-                current_status += f"{status_data['message']}"
-                
-        # Send the status as a separate message
-        if current_status:
-            await ctx.send(current_status)
     
     # If it was originally an encrypted PDF, mention that
     if info.get('is_encrypted', False):
@@ -1488,7 +1488,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 05:42:05")
+    print(f"Current Time (UTC): 2025-09-02 05:54:19")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
