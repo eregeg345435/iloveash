@@ -1454,7 +1454,7 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
             return
         except Exception as e:
             logger.error(f"Error processing PDF: {str(e)}\n{traceback.format_exc()}")
-                        await ctx.send(f"❌ Error processing PDF: {str(e)}")
+            await ctx.send(f"❌ Error processing PDF: {str(e)}")
             return
 
     except Exception as e:
