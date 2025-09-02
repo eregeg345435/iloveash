@@ -354,14 +354,14 @@ async def check_account_status(account_id):
     Enhanced with better error handling and always returns a valid status.
     """
     if not account_id:
-        return {"status": "UNKNOWN", "message": "No account ID provided"}
+        return {"status": "INACTIVE", "message": "No account ID provided"}
         
     # Clean up the account ID (remove any non-alphanumeric characters)
     account_id = re.sub(r'[^a-zA-Z0-9]', '', account_id)
     
     # Validate account ID format (usually 32 characters for Epic)
     if len(account_id) != 32:
-        return {"status": "INVALID", "message": f"Invalid account ID format: {account_id}"}
+        return {"status": "INACTIVE", "message": f"Invalid account ID format: {account_id}"}
         
     # Run the API call in a thread pool to avoid blocking
     loop = asyncio.get_event_loop()
@@ -373,22 +373,25 @@ async def check_account_status(account_id):
         
         # Handle different response types
         if isinstance(result, dict):
-            if "status" not in result and "displayName" in result:
-                # If account is active and has display name
-                result["status"] = "ACTIVE"
-            elif "status" not in result:
-                # If we got a dict but no status or display name
-                result["status"] = "UNKNOWN"
-                result["message"] = "Could not determine account status"
-        elif result is None or (isinstance(result, dict) and "status" not in result):
-            # If result is None or missing status
-            return {"status": "UNKNOWN", "message": "Could not check current account status"}
+            if "status" not in result:
+                if "displayName" in result:
+                    # If account is active and has display name
+                    result["status"] = "ACTIVE"
+                else:
+                    # If we got a dict but no display name, it's inactive
+                    result["status"] = "INACTIVE"
+                    if "message" not in result:
+                        result["message"] = "Account not found or inactive"
+        elif result is None:
+            # If result is None, the account is inactive
+            return {"status": "INACTIVE", "message": "Account not found or inactive"}
             
         logger.info(f"Account status result: {result}")
         return result
     except Exception as e:
         logger.error(f"Error checking account status: {e}")
-        return {"status": "UNKNOWN", "message": f"Error checking account status: {e}"}
+        # Default to inactive if there's an error
+        return {"status": "INACTIVE", "message": f"Error checking account status: {e}"}
 
 
 def get_channels(guild_id):
@@ -775,7 +778,7 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
                 await status_message.edit(content=f"✅ Account status check complete.")
             else:
                 # Make sure we have a placeholder if no account ID is found
-                info['account_status'] = {"status": "UNKNOWN", "message": "No account ID found in PDF"}
+                info['account_status'] = {"status": "INACTIVE", "message": "No account ID found in PDF"}
 
             # Format and send the results in a clean profile format
             await send_pdf_analysis(ctx, info)
@@ -838,18 +841,18 @@ async def send_pdf_analysis(ctx, info):
     # Add account status at the top (like in the screenshot)
     account_status = info.get('account_status')
     
-    # Make sure account_status is a dictionary to prevent 'list' object has no attribute 'get' error
+    # Make sure account_status is a dictionary to prevent errors
     if account_status is None:
-        account_status = {"status": "UNKNOWN", "message": "Could not check current account status"}
+        account_status = {"status": "INACTIVE", "message": "Could not check current account status"}
     elif isinstance(account_status, list):
         # Convert list to dict if API returned a list instead of a dict
         if len(account_status) > 0 and isinstance(account_status[0], dict):
             account_status = account_status[0]  # Take the first item if it's a dict
         else:
-            account_status = {"status": "UNKNOWN", "message": "Unexpected API response format"}
+            account_status = {"status": "INACTIVE", "message": "Unexpected API response format"}
     
     # Format based on status
-    status = account_status.get("status", "UNKNOWN").upper() if isinstance(account_status, dict) else "UNKNOWN"
+    status = account_status.get("status", "INACTIVE").upper() if isinstance(account_status, dict) else "INACTIVE"
     
     if status == "ACTIVE":
         output += "**🟢 ACCOUNT CURRENTLY ACTIVE**\n"
@@ -867,14 +870,11 @@ async def send_pdf_analysis(ctx, info):
                 elif isinstance(data, str):
                     output += f"- {platform}: {data}\n"
             output += "\n"
-    elif status == "INACTIVE":
+    elif status == "INACTIVE" or status == "ERROR" or status == "UNKNOWN":
         output += "**🔴 ACCOUNT CURRENTLY INACTIVE**\n"
         if isinstance(account_status, dict) and 'message' in account_status:
             output += f"{account_status['message']}\n"
         output += "The account may have been banned, deleted, or changed username.\n\n"
-    else:
-        output += "**⚠️ ACCOUNT STATUS UNKNOWN**\n"
-        output += "Could not check current account status.\n\n"
     
     # Add information from PDF
     output += f"**Information extracted from:** {source_file}\n\n"
@@ -1452,8 +1452,8 @@ async def custom_commands_help(ctx):
     embed.set_footer(text=f"Bot Last Updated: {LAST_UPDATED}")
 
     embed.add_field(name="!pdf [password]",
-                    value="Process an attached PDF file to extract user information\n"
-                          "(Optional password if the PDF is encrypted)",
+                    value="Process an attached PDF file to extract user information
+                              "(Optional password if the PDF is encrypted)",
                     inline=False)
                     
     if ctx.author.id in authorized_users:
@@ -1507,7 +1507,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 08:38:29")
+    print(f"Current Time (UTC): 2025-09-02 08:51:28")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
