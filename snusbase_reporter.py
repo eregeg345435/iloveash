@@ -5,7 +5,7 @@ Advanced Discord Bot with PDF Processing and Snusbase Integration
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
 - Processes Twitter usernames through Snusbase API (Premium Command)
-Last updated: 2025-09-02 09:40:27
+Last updated: 2025-09-02 10:14:03
 """
 
 import os
@@ -54,7 +54,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-02 09:40:27"
+LAST_UPDATED = "2025-09-02 10:14:03"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -437,7 +437,7 @@ def save_processed_account_ids():
 
 def detect_password_reset_pattern(transactions):
     """
-    Detect the password reset pattern shown in screenshot 7
+    Detect the password reset pattern shown in screenshot 12
     (PASSWORD_RESET_VIA_EMAIL, PASSWORD_RESET_CODE_GENERATED, EMAIL_CONFIRMATION_CODE_GENERATED, UPDATE)
     """
     if len(transactions) < 4:
@@ -445,21 +445,30 @@ def detect_password_reset_pattern(transactions):
         
     # Track if we see the pattern in sequence
     for i in range(len(transactions) - 3):
-        sequence = [t['type'] for t in transactions[i:i+4]]
+        # Get the four consecutive transactions
+        sequence = transactions[i:i+4]
         
-        # Check for exact pattern or contains these elements
-        password_reset = any('PASSWORD_RESET' in s for s in sequence[:2])
-        email_confirmation = any('EMAIL_CONFIRMATION' in s for s in sequence[1:3])
-        update = any('UPDATE' in s for s in sequence[2:4])
+        # Check the transaction types
+        types = [t['type'] for t in sequence]
         
-        if password_reset and email_confirmation and update:
-            # Check if all transactions happened on the same day
-            first_date = transactions[i]['date']
-            same_date = all(t['date'] == first_date for t in transactions[i+1:i+4])
+        # Check for specific sequence patterns
+        has_password_reset_via_email = any('PASSWORD_RESET_VIA_EMAIL' in t for t in types)
+        has_password_reset_code = any('PASSWORD_RESET_CODE_GENERATED' in t for t in types)
+        has_email_confirmation = any('EMAIL_CONFIRMATION_CODE_GENERATED' in t for t in types)
+        has_update = any('UPDATE' in t for t in types)
+        
+        # Check exact pattern as shown in the screenshot
+        if (has_password_reset_via_email and 
+            has_password_reset_code and 
+            has_email_confirmation and 
+            has_update):
             
-            if same_date:
+            # Check if these happened on the same day
+            dates = [t['date'] for t in sequence]
+            if len(set(dates)) == 1:  # All dates are the same
                 return True
-                
+            
+    # No matching pattern found
     return False
 
 
@@ -504,7 +513,7 @@ def detect_compromised_account_markers(text, transactions):
     """
     Detect markers that indicate a compromised account based on screenshots
     """
-    # Check for DISABLED_REASON: Compromised (screenshot 8)
+    # Check for DISABLED_REASON: Compromised (screenshot 11)
     compromised_reason = re.search(r'DISABLED_REASON\s*:\s*Compromised', text, re.IGNORECASE)
     if compromised_reason:
         return True
@@ -516,7 +525,7 @@ def detect_compromised_account_markers(text, transactions):
         if 'METADATA_ADD' in transaction['type'] and 'DISABLED_REASON' in transaction['details'] and 'Compromised' in transaction['details']:
             return True
             
-    # Check for password reset pattern
+    # Check for password reset pattern (screenshot 12)
     if detect_password_reset_pattern(transactions):
         return True
         
@@ -570,6 +579,7 @@ def extract_user_info_from_text(text):
         'account_disabled': False,
         'disable_count': 0,
         'disable_dates': [],
+        'disabled_timestamp': None,  # Added to track the timestamp from DISABLED_TIMESTAMP
         'reactivated': False,
         'reactivate_count': 0,
         'reactivate_dates': [],
@@ -738,6 +748,28 @@ def extract_user_info_from_text(text):
                 info['reactivated'] = True
         elif 'no disable' in status_text or 'no history' in status_text:
             info['account_disabled'] = False
+            
+    # Look for DISABLED_TIMESTAMP directly - specific check for the format in screenshot 11
+    disabled_timestamp_match = re.search(r'DISABLED_TIMESTAMP\s*:\s*([\d/]+\s+[\d:]+(?:\s*[AP]M)?)', text, re.IGNORECASE)
+    if disabled_timestamp_match:
+        info['disabled_timestamp'] = disabled_timestamp_match.group(1)
+        info['account_disabled'] = True
+        
+        # Extract the date portion for the disable_dates list
+        date_part = re.search(r'(\d{1,2}/\d{1,2}/\d{4})', info['disabled_timestamp'])
+        if date_part and date_part.group(1) not in info['disable_dates']:
+            info['disable_dates'].append(date_part.group(1))
+            info['disable_count'] += 1
+            
+    # Look for DISABLED_REASON directly - specific check for the format in screenshot 11
+    disabled_reason_match = re.search(r'DISABLED_REASON\s*:\s*(Compromised)', text, re.IGNORECASE)
+    if disabled_reason_match:
+        info['compromised_account'] = True
+        info['account_disabled'] = True
+        
+        # If we don't already have a disable count, set it to 1
+        if info['disable_count'] == 0:
+            info['disable_count'] = 1
 
     # Look for transactions (HISTORY_ACCOUNT entries) to determine if account was disabled/compromised
     transaction_patterns = [
@@ -776,9 +808,27 @@ def extract_user_info_from_text(text):
             if 'DISABLE' in transaction_type:
                 info['account_disabled'] = True
                 info['disable_count'] += 1
-                info['disable_dates'].append(date)
+                if date not in info['disable_dates']:
+                    info['disable_dates'].append(date)
                 if 'meta data' in details.lower():
                     info['deactivated'] = True
+
+            # Track METADATA_ADD with disabled information
+            if 'METADATA_ADD' in transaction_type:
+                # Check for DISABLED_TIMESTAMP
+                timestamp_match = re.search(r'DISABLED_TIMESTAMP\s*:\s*(.+)', details, re.IGNORECASE)
+                if timestamp_match:
+                    info['disabled_timestamp'] = timestamp_match.group(1)
+                    info['account_disabled'] = True
+                    if date not in info['disable_dates']:
+                        info['disable_dates'].append(date)
+                        info['disable_count'] += 1
+                
+                # Check for DISABLED_REASON
+                reason_match = re.search(r'DISABLED_REASON\s*:\s*(Compromised)', details, re.IGNORECASE)
+                if reason_match:
+                    info['compromised_account'] = True
+                    info['account_disabled'] = True
 
             if 'REACTIVE' in transaction_type or 'REENABLE' in transaction_type or 'ENABLED' in transaction_type:
                 info['reactivated'] = True
@@ -795,10 +845,6 @@ def extract_user_info_from_text(text):
                 if recovery_email and recovery_email not in info['all_emails']:
                     info['all_emails'].append(recovery_email)
                     
-            # Check for METADATA_ADD with DISABLED_REASON: Compromised (screenshot 8)
-            if 'METADATA_ADD' in transaction_type and 'DISABLED_REASON' in details and 'Compromised' in details:
-                info['compromised_account'] = True
-                
             # Check for platform tokens - highest priority
             if ('addedexternalauth' in transaction_type.lower() or 
                 'externalauth' in transaction_type.lower()):
@@ -846,10 +892,11 @@ def extract_user_info_from_text(text):
             info['platform'] = platform
             info['platform_token'] = token
 
-    # Check for the password reset pattern from screenshot 7
+    # Check for the password reset pattern from screenshot 12
     info['password_reset_pattern'] = detect_password_reset_pattern(info['transactions'])
     if info['password_reset_pattern']:
         info['email_changed'] = True  # Likely indicates email change
+        info['compromised_account'] = True  # Password reset pattern indicates compromise
         
     # Check for compromised account markers across transactions and details
     if detect_compromised_account_markers(text, info['transactions']):
@@ -899,16 +946,19 @@ def load_users_from_text(text: str) -> List[Dict[str, str]]:
     return users
 
 
-def query_snusbase_api(term, search_type, max_retries=4, backoff_factor=1.5):
-    """Query the Snusbase API"""
+def query_snusbase_api(term, search_type, max_retries=5, backoff_factor=1.5):
+    """
+    Query the Snusbase API
+    Updated to match the working implementation
+    """
     headers = {"Auth": SNUSBASE_API_KEY, "Content-Type": "application/json"}
     data = {"terms": [term], "types": [search_type]}
     attempt = 0
 
     while attempt < max_retries:
         try:
+            logger.debug(f"Snusbase API [{search_type}] {term} - attempt {attempt+1}")
             resp = requests.post(API_URL, headers=headers, json=data, timeout=15)
-            logger.debug(f"Snusbase API [{search_type}] {term} status={resp.status_code}")
 
             if resp.status_code == 401:
                 logger.error("ERROR: Snusbase API key unauthorized!")
@@ -916,17 +966,20 @@ def query_snusbase_api(term, search_type, max_retries=4, backoff_factor=1.5):
 
             resp.raise_for_status()
             resp_json = resp.json()
-
+            
             all_results = []
             for db, entries in resp_json.get("results", {}).items():
                 for entry in entries:
                     entry["breach"] = db
                     all_results.append(entry)
+            
+            logger.debug(f"Snusbase returned {len(all_results)} results for {search_type}: {term}")
             return all_results
 
         except requests.exceptions.HTTPError as e:
             if resp.status_code == 503:
                 wait_time = backoff_factor ** attempt
+                logger.warning(f"503 Service Unavailable. Retrying after {wait_time:.1f}s...")
                 time.sleep(wait_time)
                 attempt += 1
                 continue
@@ -937,6 +990,7 @@ def query_snusbase_api(term, search_type, max_retries=4, backoff_factor=1.5):
             logger.error(f"API error for {search_type} {term}: {str(e)}")
             break
 
+    logger.error(f"Failed to get results for {term} after {max_retries} attempts.")
     return []
 
 
@@ -979,35 +1033,43 @@ async def _first_pass_one(user: Dict[str, str]) -> Tuple[str, Dict[str, str], Li
     handle = extract_handle(user.get("twitter_link", ""), "twitter.com")
 
     if not handle:
+        logger.debug(f"No Twitter handle for {ident}")
         return ident, {"status": "SKIP", "reason": "no twitter handle",
-                       "twitter_link": user.get("twitter_link", "")}, []
+                      "twitter_link": user.get("twitter_link", "")}, []
 
     # Let asyncio breathe
     await asyncio.sleep(0)
 
+    # Search for the Twitter username in Snusbase
+    logger.debug(f"Searching for Twitter handle: {handle}")
     start_time = time.time()
     results = query_snusbase_api(handle, "username")
     elapsed = time.time() - start_time
-    logger.debug(f"Lookup for {handle} took {elapsed:.2f} seconds")
+    logger.debug(f"Lookup for {handle} took {elapsed:.2f} seconds, got {len(results)} results")
 
     emails = []
     for entry in results:
         breach_name = entry.get("breach", "")
         email_val = entry.get("email", "")
-        logger.debug(f"Entry: {entry}")
-        logger.debug(f"Breach: {breach_name}, Email: {email_val}")
+        logger.debug(f"Entry: breach={breach_name}, email={email_val}")
 
+        # Only include results from TWITTER_COM breach if filter is set
         if BREACH_FILTER and BREACH_FILTER.lower() not in breach_name.lower():
+            logger.debug(f"Skipping non-Twitter breach: {breach_name}")
             continue
         if not email_val:
+            logger.debug(f"Skipping entry with no email")
             continue
         emails.append(email_val)
+        logger.debug(f"Added email: {email_val}")
 
     if not emails:
+        logger.debug(f"No emails found for {handle}")
         return ident, {"status": "NO_RESULTS", "twitter_handle": handle}, []
 
     # Only return summary, not emails for progress reporting
-    return ident, {"status": "OK", "twitter_handle": handle, "emails_collected": "[hidden]"}, emails
+    logger.debug(f"Found {len(emails)} emails for {handle}")
+    return ident, {"status": "OK", "twitter_handle": handle, "emails_found": len(emails)}, emails
 
 
 async def _second_pass_one(email: str, attached_users: List[Dict[str, str]]) -> List[Tuple[str, dict]]:
@@ -1015,8 +1077,9 @@ async def _second_pass_one(email: str, attached_users: List[Dict[str, str]]) -> 
     # Let asyncio breathe
     await asyncio.sleep(0)
 
+    logger.debug(f"Second pass: looking up email {email}")
     results = query_snusbase_api(email, "email")
-    logger.debug(f"RAW API RESPONSE FOR {email}: {results}")
+    logger.debug(f"Got {len(results)} results for email {email}")
 
     ip_candidates, usernames, birthdates = [], [], []
     for res in results:
@@ -1036,6 +1099,7 @@ async def _second_pass_one(email: str, attached_users: List[Dict[str, str]]) -> 
         if bdate:
             birthdates.append(bdate)
 
+    # Remove duplicate IPs
     ip_candidates = list(set(ip_candidates))
     location = lookup_ip_location(ip_candidates)
 
@@ -1043,6 +1107,8 @@ async def _second_pass_one(email: str, attached_users: List[Dict[str, str]]) -> 
     birthdate_out = birthdates[0] if birthdates else "NA"
     ips_out = ", ".join(sorted(ip_candidates)) if ip_candidates else "NA"
     location_out = location if location else "NA"
+
+    logger.debug(f"Email {email} - IPs: {len(ip_candidates)}, Usernames: {len(usernames)}, Location: {location_out}")
 
     outs = []
     for info in attached_users:
@@ -1103,7 +1169,7 @@ async def first_pass_with_channels(users: List[Dict[str, str]], pre_search_chann
             status = result.get("status", "").upper()
             text = f"Status: {status}"
             if status == "OK":
-                text += " (emails found)"
+                text += f" ({len(emails)} emails found)"
             elif status == "NO_RESULTS":
                 text += " (no results)"
             elif status == "SKIP":
@@ -1372,7 +1438,7 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
                     await ctx.send("Error saving the unlocked PDF.")
 
         except PyPDF2.errors.PdfReadError as e:
-            await ctx.send(f"❌ Error: Cannot read the PDF file. It may be corrupted or not a valid PDF. {str(e)}")
+                        await ctx.send(f"❌ Error: Cannot read the PDF file. It may be corrupted or not a valid PDF. {str(e)}")
             return
         except Exception as e:
             logger.error(f"Error processing PDF: {str(e)}\n{traceback.format_exc()}")
@@ -1467,10 +1533,12 @@ async def send_pdf_analysis(ctx, info):
     if info['oldest_ip']:
         output += f"**Oldest IP:** {info['oldest_ip']}\n"
     
-        # Account Status History
+    # Account Status History
     output += "\n**Account Status History:** "
     if info['account_disabled']:
         output += f"Disabled {info['disable_count']} time(s)"
+        if info['disabled_timestamp']:
+            output += f" (Last timestamp: {info['disabled_timestamp']})"
         if info['reactivated']:
             output += f", Reactivated {info['reactivate_count']} time(s)"
         if info['compromised_account']:
@@ -2096,7 +2164,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 09:44:48")
+    print(f"Current Time (UTC): 2025-09-02 10:28:23")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
