@@ -5,7 +5,7 @@ Advanced Discord Bot with PDF Processing and Snusbase Integration
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
 - Processes Twitter usernames through Snusbase API (Premium Command)
-Last updated: 2025-09-02 12:29:57
+Last updated: 2025-09-02 12:46:18
 """
 
 import os
@@ -54,7 +54,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-02 12:29:57"
+LAST_UPDATED = "2025-09-02 12:46:18"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -1447,14 +1447,14 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
                     os.unlink(temp_file.name)
                 except Exception as e:
                     logger.error(f"Error saving unlocked PDF: {str(e)}")
-                    await ctx.send("Error saving the unlocked PDF.")
+                                       await ctx.send("Error saving the unlocked PDF.")
 
         except PyPDF2.errors.PdfReadError as e:
             await ctx.send(f"❌ Error: Cannot read the PDF file. It may be corrupted or not a valid PDF. {str(e)}")
             return
         except Exception as e:
             logger.error(f"Error processing PDF: {str(e)}\n{traceback.format_exc()}")
-                        await ctx.send(f"❌ Error processing PDF: {str(e)}")
+            await ctx.send(f"❌ Error processing PDF: {str(e)}")
             return
 
     except Exception as e:
@@ -2230,7 +2230,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 12:37:30")
+    print(f"Current Time (UTC): 2025-09-02 12:51:54")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
