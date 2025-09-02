@@ -5,7 +5,7 @@ Advanced Discord Bot with PDF Processing and Snusbase Integration
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
 - Processes Twitter usernames through Snusbase API (Premium Command)
-Last updated: 2025-09-02 13:55:35
+Last updated: 2025-09-02 14:20:00
 """
 
 import os
@@ -54,7 +54,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-02 13:55:35"
+LAST_UPDATED = "2025-09-02 13:11:30"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -113,13 +113,13 @@ authorized_users = set()
 # Set to track already processed account IDs to prevent duplicates
 processed_account_ids = set()
 
-# Snusbase API config
+# --- SNUSBASE CONFIG (FIXED) ---
 SNUSBASE_API_KEY = "sb3afud8h893krzzy8ec9r6s5m7u7n"
-API_URL = "https://api.snusbase.com/data/search"
-IP_WHOIS_URL = "https://api.snusbase.com/tools/ip-whois"
+API_URL = "https://api-legacy.snusbase.com/data/search"  # FIXED URL
+IP_WHOIS_URL = "https://api-legacy.snusbase.com/tools/ip-whois" # FIXED URL
 BREACH_FILTER = "TWITTER_COM"
 CONCURRENCY = 8
-RATE_LIMIT_DELAY = 0.12
+RATE_LIMIT_DELAY = 0.2  # Increased delay to be safe
 
 # Try to load processed account IDs from file
 try:
@@ -133,7 +133,7 @@ except Exception as e:
 DELETE_MESSAGES = True
 
 # Delay before message deletion (in seconds)
-MESSAGE_DELETE_DELAY = 1  # Reduced to 1 second for faster response
+MESSAGE_DELETE_DELAY = 1
 
 # Track messages sent to avoid duplication
 message_cache = set()
@@ -921,7 +921,7 @@ def extract_user_info_from_text(text):
     return info
 
 
-# Snusbase API Functions
+# --- SNUSBASE API FUNCTIONS (FIXED) ---
 def extract_handle(link: str, domain: str) -> str:
     """Extract a handle from a social media link"""
     try:
@@ -960,140 +960,163 @@ def load_users_from_text(text: str) -> List[Dict[str, str]]:
 
 def query_snusbase_api(term, search_type, max_retries=5, backoff_factor=1.5):
     """
-    Query the Snusbase API with detailed logging.
+    Query the Snusbase API (Corrected Implementation)
     """
-    headers = {"Auth": SNUSBASE_API_KEY, "Content-Type": "application/json"}
-    data = {"terms": [term], "types": [search_type]}
+    headers = {"Snus-Auth": SNUSBASE_API_KEY, "Content-Type": "application/json"} # FIXED HEADER
+    data = {"terms": [term], "types": [search_type], "wildcard": False}
     attempt = 0
+
     while attempt < max_retries:
         try:
-            logger.info(f"Snusbase API Call: Searching '{term}' as {search_type}, attempt {attempt+1}")
+            logger.debug(f"Snusbase API [{search_type}] {term} - attempt {attempt+1}")
             resp = requests.post(API_URL, headers=headers, json=data, timeout=15)
+
+            if resp.status_code == 401:
+                logger.error("ERROR: Snusbase API key unauthorized!")
+                break
+
             resp.raise_for_status()
             resp_json = resp.json()
-            all_results = []
-            for db, entries in resp_json.get("results", {}).items():
-                for entry in entries:
-                    entry["breach"] = db
-                    all_results.append(entry)
-            logger.info(f"Snusbase API Return: {len(all_results)} results for '{term}'")
+            
+            # The legacy API returns results in a "results" list
+            all_results = resp_json.get("results", [])
+            
+            logger.debug(f"Snusbase returned {len(all_results)} results for {search_type}: {term}")
             return all_results
+
         except requests.exceptions.HTTPError as e:
             if resp.status_code == 503:
                 wait_time = backoff_factor ** attempt
-                logger.warning(f"Snusbase 503 Service Unavailable. Retrying after {wait_time:.1f}s...")
+                logger.warning(f"503 Service Unavailable. Retrying after {wait_time:.1f}s...")
                 time.sleep(wait_time)
                 attempt += 1
                 continue
-            else:
-                logger.error(f"Snusbase HTTP error for {search_type} '{term}': {e}")
-                break
-        except Exception as e:
-            logger.error(f"Snusbase API error for {search_type} '{term}': {e}")
+            logger.error(f"HTTP error for {search_type} {term}: {str(e)}")
             break
-    logger.error(f"Snusbase failed to get results for '{term}' after {max_retries} attempts.")
+
+        except Exception as e:
+            logger.error(f"API error for {search_type} {term}: {str(e)}")
+            break
+
+    logger.error(f"Failed to get results for {term} after {max_retries} attempts.")
     return []
+
+
+def lookup_ip_location(ip_list):
+    """Look up location information for IP addresses"""
+    if not ip_list:
+        return None
+    headers = {"Snus-Auth": SNUSBASE_API_KEY, "Content-Type": "application/json"} # FIXED HEADER
+    data = {"terms": ip_list}
+
+    try:
+        resp = requests.post(IP_WHOIS_URL, headers=headers, json=data, timeout=15)
+        logger.debug(f"IP WHOIS status {resp.status_code}")
+        resp.raise_for_status()
+
+        results = resp.json().get("results", {})
+        locations = []
+
+        for ip, info in results.items():
+            city = info.get("city", "")
+            region = info.get("regionName", "")
+            country = info.get("country", "")
+
+            if city or region or country:
+                loc = ", ".join(filter(None, [city, region, country]))
+                locations.append(loc)
+
+        if not locations:
+            return None
+        return max(set(locations), key=locations.count)
+
+    except Exception as e:
+        logger.error(f"IP WHOIS lookup error: {str(e)}")
+        return None
 
 
 async def _first_pass_one(user: Dict[str, str]) -> Tuple[str, Dict[str, str], List[str]]:
     """Process a single user in the first pass"""
     ident = f"{user['username']}#{user['discriminator']}"
-    twitter_link = user.get("twitter_link", "")
-    handle = extract_handle(twitter_link, "twitter.com")
+    handle = extract_handle(user.get("twitter_link", ""), "twitter.com")
 
     if not handle:
-        logger.info(f"Skipping user {ident}: No Twitter handle found in '{twitter_link}'")
-        return ident, {"status": "SKIP", "reason": "no twitter handle", "twitter_link": twitter_link}, []
+        logger.debug(f"No Twitter handle for {ident}")
+        return ident, {"status": "SKIP", "reason": "no twitter handle",
+                      "twitter_link": user.get("twitter_link", "")}, []
 
-    logger.info(f"First Pass: Searching for Twitter handle: @{handle} (from {ident})")
-    results = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: query_snusbase_api(handle, "username")
-    )
-    
-    if not results:
-        logger.info(f"First Pass: No results from Snusbase for @{handle}")
-        return ident, {"status": "NO_RESULTS", "twitter_handle": handle}, []
+    # Let asyncio breathe
+    await asyncio.sleep(0)
+
+    # Search for the Twitter username in Snusbase
+    logger.debug(f"Searching for Twitter handle: {handle}")
+    start_time = time.time()
+    results = query_snusbase_api(handle, "username")
+    elapsed = time.time() - start_time
+    logger.debug(f"Lookup for {handle} took {elapsed:.2f} seconds, got {len(results)} results")
 
     emails = []
-    found_in_target_breach = False
-    for res in results:
-        breach_name = res.get("breach", "")
-        email_val = res.get("email", "")
-        
-        # This is the corrected filtering logic based on your working code.
-        if BREACH_FILTER and BREACH_FILTER.lower() in breach_name.lower():
-            if email_val and email_val not in emails:
-                logger.info(f"Found matching email '{email_val}' for @{handle} in breach '{breach_name}'")
-                emails.append(email_val)
-                found_in_target_breach = True
+    for entry in results:
+        breach_name = entry.get("table", "") # Legacy API uses "table" for breach name
+        email_val = entry.get("email", "")
+        logger.debug(f"Entry: breach={breach_name}, email={email_val}")
 
-    if not found_in_target_breach:
-        logger.info(f"No emails found specifically in '{BREACH_FILTER}' breaches for @{handle}")
-        return ident, {"status": "NO_RESULTS", "reason": f"no email in {BREACH_FILTER} breach", "twitter_handle": handle}, []
+        # Only include results from TWITTER_COM breach if filter is set
+        if BREACH_FILTER and BREACH_FILTER.lower() not in breach_name.lower():
+            logger.debug(f"Skipping non-Twitter breach: {breach_name}")
+            continue
+        if not email_val:
+            logger.debug(f"Skipping entry with no email")
+            continue
+        emails.append(email_val)
+        logger.debug(f"Added email: {email_val}")
 
-    logger.info(f"First Pass successful for @{handle}: Found {len(emails)} email(s).")
+    if not emails:
+        logger.debug(f"No emails found for {handle}")
+        return ident, {"status": "NO_RESULTS", "twitter_handle": handle}, []
+
+    # Only return summary, not emails for progress reporting
+    logger.debug(f"Found {len(emails)} emails for {handle}")
     return ident, {"status": "OK", "twitter_handle": handle, "emails_found": len(emails)}, emails
-
-
-async def lookup_ip_location(ip_list):
-    """Asynchronous wrapper for IP WHOIS lookup"""
-    if not ip_list:
-        return None
-    headers = {"Auth": SNUSBASE_API_KEY, "Content-Type": "application/json"}
-    data = {"terms": ip_list}
-    try:
-        loop = asyncio.get_event_loop()
-        resp = await loop.run_in_executor(
-            None, lambda: requests.post(IP_WHOIS_URL, headers=headers, json=data, timeout=15)
-        )
-        resp.raise_for_status()
-        results = resp.json().get("results", {})
-        locations = []
-        for ip, info in results.items():
-            city = info.get("city", "")
-            region = info.get("regionName", "")
-            country = info.get("country", "")
-            if city or region or country:
-                loc = ", ".join(filter(None, [city, region, country]))
-                locations.append(loc)
-        if not locations:
-            return None
-        return max(set(locations), key=locations.count)
-    except Exception as e:
-        logger.error(f"IP WHOIS lookup error: {e}")
-        return None
 
 
 async def _second_pass_one(email: str, attached_users: List[Dict[str, str]]) -> List[Tuple[str, dict]]:
     """Process a single email in the second pass"""
-    logger.info(f"Second Pass: Searching for email: {email}")
-    results = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: query_snusbase_api(email, "email")
-    )
+    # Let asyncio breathe
+    await asyncio.sleep(0)
 
-    if not results:
-        logger.info(f"Second Pass: No data found for {email}")
-        return []
+    logger.debug(f"Second pass: looking up email {email}")
+    results = query_snusbase_api(email, "email")
+    logger.debug(f"Got {len(results)} results for email {email}")
 
     ip_candidates, usernames, birthdates = [], [], []
     for res in results:
         lastip = res.get("lastip", "")
         regip = res.get("regip", "")
-        if lastip: ip_candidates.append(lastip)
-        if regip: ip_candidates.append(regip)
-        uname = res.get("username", "")
-        if uname: usernames.append(uname)
-        bdate = res.get("birthdate", "") or res.get("birthday", "")
-        if bdate: birthdates.append(bdate)
 
+        if lastip:
+            ip_candidates.append(lastip)
+        if regip:
+            ip_candidates.append(regip)
+
+        uname = res.get("username", "")
+        if uname:
+            usernames.append(uname)
+
+        bdate = res.get("birthdate", "") or res.get("birthday", "")
+        if bdate:
+            birthdates.append(bdate)
+
+    # Remove duplicate IPs
     ip_candidates = list(set(ip_candidates))
-    location = await lookup_ip_location(ip_candidates)
+    location = lookup_ip_location(ip_candidates)
+
     most_common_username = max(set(usernames), key=usernames.count) if usernames else "NA"
     birthdate_out = birthdates[0] if birthdates else "NA"
     ips_out = ", ".join(sorted(ip_candidates)) if ip_candidates else "NA"
     location_out = location if location else "NA"
 
-    logger.info(f"Second Pass: Email {email} - IPs: {len(ip_candidates)}, Usernames: {len(usernames)}, Location: {location_out}")
+    logger.debug(f"Email {email} - IPs: {len(ip_candidates)}, Usernames: {len(usernames)}, Location: {location_out}")
 
     outs = []
     for info in attached_users:
@@ -1156,7 +1179,7 @@ async def first_pass_with_channels(users: List[Dict[str, str]], pre_search_chann
             if status == "OK":
                 text += f" ({len(emails)} emails found)"
             elif status == "NO_RESULTS":
-                text += f" (no results - {result.get('reason', 'unknown')})"
+                text += " (no results)"
             elif status == "SKIP":
                 text += " (skipped)"
 
@@ -1408,9 +1431,9 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
 
                 try:
                     # Create a temporary file for the unlocked PDF
-                    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
+                                        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
                         # Write the unlocked PDF to the temporary file
-                        pdf_writer.write(temp_file.name)
+                        pdf_writer.write(temp_file)
 
                     # Send the unlocked PDF as a Discord attachment
                     await ctx.send("Here is the unlocked PDF:",
@@ -1586,7 +1609,7 @@ async def on_ready():
     print(f"Bot is ready! Logged in as {bot.user.name}")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 13:55:35")
+    print(f"Current Time (UTC): 2025-09-02 13:16:04")
     
     # Start proxy maintenance task
     bot.loop.create_task(proxy_maintenance_task())
@@ -2203,7 +2226,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 13:55:35")
+    print(f"Current Time (UTC): 2025-09-02 13:16:04")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
