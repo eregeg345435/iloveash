@@ -4,7 +4,7 @@
 Advanced Discord Bot with PDF Processing
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-02 06:01:24
+Last updated: 2025-09-02 07:44:17
 """
 
 import os
@@ -52,7 +52,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-02 06:01:24"
+LAST_UPDATED = "2025-09-02 07:44:17"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -368,7 +368,7 @@ async def check_account_status(account_id):
     Enhanced with better error handling and always returns a valid status.
     """
     if not account_id:
-        return {"status": "ERROR", "message": "No account ID provided"}
+        return {"status": "UNKNOWN", "message": "No account ID provided"}
         
     # Clean up the account ID (remove any non-alphanumeric characters)
     account_id = re.sub(r'[^a-zA-Z0-9]', '', account_id)
@@ -394,15 +394,15 @@ async def check_account_status(account_id):
                 # If we got a dict but no status or display name
                 result["status"] = "UNKNOWN"
                 result["message"] = "Could not determine account status"
-        else:
-            # If result is not a dict (None, list, etc.)
-            return {"status": "ERROR", "message": f"Unexpected response format: {type(result).__name__}"}
+        elif result is None or (isinstance(result, dict) and "status" not in result):
+            # If result is None or missing status
+            return {"status": "UNKNOWN", "message": "Could not check current account status"}
             
         logger.info(f"Account status result: {result}")
         return result
     except Exception as e:
         logger.error(f"Error checking account status: {e}")
-        return {"status": "ERROR", "message": f"Error checking account status: {e}"}
+        return {"status": "UNKNOWN", "message": f"Error checking account status: {e}"}
 
 
 def get_channels(guild_id):
@@ -784,9 +784,6 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
                 status_message = await ctx.send(f"🔍 Checking current account status for ID: `{info['account_id']}`...")
                 account_status = await check_account_status(info['account_id'])
                 
-                # Debug log the API response
-                logger.info(f"API Response for account {info['account_id']}: {account_status}")
-                
                 # Store the status in the info dictionary
                 info['account_status'] = account_status
                 await status_message.edit(content=f"✅ Account status check complete.")
@@ -844,116 +841,92 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
 async def send_pdf_analysis(ctx, info):
     """
     Send a clean PDF analysis format with account status information.
-    Complete rewrite to ensure account status is always shown.
+    Format matches the example in the screenshot.
     """
     # Get the source filename
     source_file = info.get('source_file', 'Unknown')
-
-    # First message: Account status
-    status_output = "**📊 ACCOUNT ANALYSIS**\n\n"
     
-    # ALWAYS include account status section, even if API request failed
-    account_status = info.get('account_status', {"status": "UNKNOWN", "message": "No status available"})
+    # Start building the output
+    output = "**📊 ACCOUNT ANALYSIS**\n\n"
     
-    # Log the account status for debugging
-    logger.info(f"Account status for output: {account_status}")
+    # Add account status at the top (like in the screenshot)
+    account_status = info.get('account_status', {"status": "UNKNOWN", "message": "Could not check current account status"})
     
-    if isinstance(account_status, dict):
-        status = account_status.get("status", "UNKNOWN").upper()
+    # Format based on status
+    status = account_status.get("status", "UNKNOWN").upper()
+    if status == "ACTIVE":
+        output += "**🟢 ACCOUNT CURRENTLY ACTIVE**\n"
         
-        if status == "ACTIVE":
-            status_output += "**🟢 ACCOUNT CURRENTLY ACTIVE**\n"
-            
-            # Include current display name if available
-            if 'displayName' in account_status:
-                status_output += f"**Current Display Name:** {account_status['displayName']}\n"
-            elif 'display_name' in account_status:
-                status_output += f"**Current Display Name:** {account_status['display_name']}\n"
-                
-            # Include links if available
-            if 'externalAuths' in account_status and account_status['externalAuths']:
-                status_output += "**Current Linked Accounts:**\n"
-                for platform, data in account_status['externalAuths'].items():
-                    if isinstance(data, dict) and 'externalDisplayName' in data:
-                        status_output += f"- {platform}: {data.get('externalDisplayName', 'N/A')}\n"
-                    elif isinstance(data, str):
-                        status_output += f"- {platform}: {data}\n"
-                status_output += "\n"
-                
-        elif status == "INACTIVE":
-            status_output += "**🔴 ACCOUNT CURRENTLY INACTIVE**\n"
-            if 'message' in account_status:
-                status_output += f"{account_status['message']}\n"
-            status_output += "The account may have been banned, deleted, or changed username.\n\n"
-            
-        elif status in ['ERROR', 'FORBIDDEN']:
-            status_output += "**⚠️ ERROR CHECKING ACCOUNT STATUS**\n"
-            if 'message' in account_status:
-                status_output += f"{account_status['message']}\n\n"
+        # Include current display name if available
+        if 'displayName' in account_status:
+            output += f"Current Display Name: {account_status['displayName']}\n"
         
-        elif status == "INVALID":
-            status_output += "**⚠️ INVALID ACCOUNT ID FORMAT**\n"
-            if 'message' in account_status:
-                status_output += f"{account_status['message']}\n\n"
-        
-        else:  # UNKNOWN or any other status
-            status_output += "**⚠️ ACCOUNT STATUS UNKNOWN**\n"
-            if 'message' in account_status:
-                status_output += f"{account_status['message']}\n"
-            status_output += "Could not check current account status.\n\n"
+        # Include linked accounts if available
+        if 'externalAuths' in account_status and account_status['externalAuths']:
+            output += "Linked Accounts:\n"
+            for platform, data in account_status['externalAuths'].items():
+                if isinstance(data, dict) and 'externalDisplayName' in data:
+                    output += f"- {platform}: {data.get('externalDisplayName', 'N/A')}\n"
+                elif isinstance(data, str):
+                    output += f"- {platform}: {data}\n"
+            output += "\n"
+    elif status == "INACTIVE":
+        output += "**🔴 ACCOUNT CURRENTLY INACTIVE**\n"
+        if 'message' in account_status:
+            output += f"{account_status['message']}\n"
+        output += "The account may have been banned, deleted, or changed username.\n\n"
     else:
-        # Failsafe if account_status is not a dict
-        status_output += "**⚠️ ACCOUNT STATUS UNKNOWN**\n"
-        status_output += "Could not retrieve account status information.\n\n"
+        output += "**⚠️ ACCOUNT STATUS UNKNOWN**\n"
+        output += "Could not check current account status.\n\n"
     
-    # Add PDF information right after the status in the SAME message
-    status_output += f"**Information extracted from:** {source_file}\n\n"
+    # Add information from PDF
+    output += f"**Information extracted from:** {source_file}\n\n"
     
     # Display Names with count if multiple
     if info['display_names']:
         display_names_text = ", ".join(info['display_names'])
-        status_output += f"**Display Names:** {display_names_text}\n"
+        output += f"**Display Names:** {display_names_text}\n"
         if len(info['display_names']) > 1:
-            status_output += f"Changed: {len(info['display_names']) - 1}\n"
+            output += f"Changed: {len(info['display_names']) - 1}\n"
     
     # Current Email
     if info['email']:
-        status_output += f"**Current Email:** {info['email']}\n"
+        output += f"**Current Email:** {info['email']}\n"
     
     # Account ID
     if info['account_id']:
-        status_output += f"**Account ID:** {info['account_id']}\n"
+        output += f"**Account ID:** {info['account_id']}\n"
     
     # Creation Date
     if info['creation_date']:
-        status_output += f"**Creation Date:** {info['creation_date']}\n"
+        output += f"**Creation Date:** {info['creation_date']}\n"
     
     # Platform - now includes platform token if available
     if info['platform']:
         if info['platform_token']:
-            status_output += f"**Platform:** {info['platform']} [{info['platform_token']}]\n"
+            output += f"**Platform:** {info['platform']} [{info['platform_token']}]\n"
         else:
-            status_output += f"**Platform:** {info['platform']}\n"
+            output += f"**Platform:** {info['platform']}\n"
     
     # Oldest IP
     if info['oldest_ip']:
-        status_output += f"**Oldest IP:** {info['oldest_ip']}\n"
+        output += f"**Oldest IP:** {info['oldest_ip']}\n"
     
     # Account Status History
-    status_output += "\n**Account Status History:** "
+    output += "\n**Account Status History:** "
     if info['account_disabled']:
-        status_output += f"Disabled {info['disable_count']} time(s)"
+        output += f"Disabled {info['disable_count']} time(s)"
         if info['compromised_account']:
-            status_output += ", **COMPROMISED ACCOUNT DETECTED**"
+            output += ", **COMPROMISED ACCOUNT DETECTED**"
         if info['deactivated']:
-            status_output += ", Deactivated (metadata added)"
+            output += ", Deactivated (metadata added)"
         if info['reactivated']:
-            status_output += ", Reactivated (metadata removed)"
+            output += ", Reactivated (metadata removed)"
     else:
-        status_output += "No disable/reactivation history found"
+        output += "No disable/reactivation history found"
     
-    # Send the complete analysis in ONE message
-    await ctx.send(status_output)
+    # Send the complete analysis
+    await ctx.send(output)
     
     # If it was originally an encrypted PDF, mention that
     if info.get('is_encrypted', False):
@@ -1254,13 +1227,32 @@ async def lookup_command(ctx, *args):
             
             display_name = result.get("displayName", "Unknown")
             epic_id = result.get("id", value)  # fall back to input
+            
+            # Set the status for lookup
+            if "status" not in result:
+                result["status"] = "ACTIVE"
 
+            # Determine embed color based on status
+            color = discord.Color.green() if result.get("status") == "ACTIVE" else discord.Color.red()
+            
+            # Create the embed with status information at the top
             embed = discord.Embed(
                 title=f"Epic Account (by ID): {display_name}",
-                color=discord.Color.green()
+                color=color
             )
+            
+            # Add status field at the top
+            if result.get("status") == "ACTIVE":
+                embed.add_field(name="Status", value="🟢 ACCOUNT CURRENTLY ACTIVE", inline=False)
+            elif result.get("status") == "INACTIVE":
+                embed.add_field(name="Status", value="🔴 ACCOUNT CURRENTLY INACTIVE", inline=False)
+            else:
+                embed.add_field(name="Status", value="⚠️ ACCOUNT STATUS UNKNOWN", inline=False)
+            
+            # Add the account ID
             embed.add_field(name="Account ID", value=epic_id, inline=False)
 
+            # Add external accounts if available
             external = result.get("externalAuths") or {}
             if external:
                 linked_lines = []
@@ -1282,13 +1274,32 @@ async def lookup_command(ctx, *args):
             
             display_name = result.get("displayName", "Unknown")
             epic_id = result.get("id", "Unknown")
+            
+            # Set the status for lookup
+            if "status" not in result:
+                result["status"] = "ACTIVE"
 
+            # Determine embed color based on status
+            color = discord.Color.green() if result.get("status") == "ACTIVE" else discord.Color.red()
+            
+            # Create the embed with status information at the top
             embed = discord.Embed(
                 title=f"Epic Account (exact name match): {display_name}",
-                color=discord.Color.green()
+                color=color
             )
+            
+            # Add status field at the top
+            if result.get("status") == "ACTIVE":
+                embed.add_field(name="Status", value="🟢 ACCOUNT CURRENTLY ACTIVE", inline=False)
+            elif result.get("status") == "INACTIVE":
+                embed.add_field(name="Status", value="🔴 ACCOUNT CURRENTLY INACTIVE", inline=False)
+            else:
+                embed.add_field(name="Status", value="⚠️ ACCOUNT STATUS UNKNOWN", inline=False)
+            
+            # Add the account ID
             embed.add_field(name="Account ID", value=epic_id, inline=False)
 
+            # Add external accounts if available
             external = result.get("externalAuths") or {}
             if external:
                 linked_lines = []
@@ -1521,7 +1532,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 07:39:37")
+    print(f"Current Time (UTC): 2025-09-02 07:59:16")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
