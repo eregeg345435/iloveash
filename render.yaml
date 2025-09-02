@@ -1,0 +1,17 @@
+services:
+  - type: worker
+    name: discord-pdf-epic-bot
+    env: docker
+    autoDeploy: true
+    plan: starter
+    disk:
+      name: bot-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DISCORD_BOT_TOKEN
+        sync: false   # set this in Render dashboard
+      - key: HEALTH_WEBHOOK_URL
+        sync: false   # optional webhook for health pings
+      - key: DATA_DIR
+        value: /data
