@@ -4,7 +4,7 @@
 Advanced Discord Bot with PDF Processing
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-01 11:56:17
+Last updated: 2025-09-02 05:06:20
 """
 
 import os
@@ -52,7 +52,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-01 11:56:17"
+LAST_UPDATED = "2025-09-02 05:06:20"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -264,22 +264,48 @@ def get_api_response(url, timeout=8.0):
         return {"status": "ERROR", "message": f"Error: {str(e)}"}
 
 
-def epic_lookup(value, mode=None):
+def epic_lookup(value, mode=None, platform=None):
     """
     Look up Epic account info by display name or account ID.
     Uses a working proxy if available.
+    
+    Parameters:
+    - value: The display name or account ID to look up
+    - mode: 'name', 'id', or None (auto-detect)
+    - platform: Optional platform filter ('xbl', 'psn', etc.)
     """
-    value = (value or "").strip()
-    if not value:
+    if not value or value.strip() == "":
         return {"status": "ERROR", "message": "Please provide a display name or account ID"}
+    
+    # Strip whitespace
+    value = value.strip()
 
+    # Auto-detect mode if not provided
     if mode is None:
         mode = "id" if _HEX32.match(value) else "name"
     elif mode not in {"name", "id"}:
         return {"status": "ERROR", "message": "mode must be 'name', 'id', or None"}
 
+    # Construct API URL
     url = f"{API_BASE}/{mode}/{value}"
-    return get_api_response(url)
+    
+    # Make the API request
+    response = get_api_response(url)
+    
+    # If we got a platform filter and the response is a list, filter it
+    if platform and isinstance(response, list):
+        filtered_results = []
+        for account in response:
+            if 'externalAuths' in account:
+                # Check if the account has the requested platform
+                if platform.lower() in account['externalAuths']:
+                    filtered_results.append(account)
+        
+        # Return filtered results if we found any, otherwise return the original response
+        if filtered_results:
+            return filtered_results
+    
+    return response
 
 
 def detect_platform_from_transactions(text):
@@ -1085,31 +1111,73 @@ async def process_pdf_command(ctx, password=None):
 
 
 @bot.command(name='lookup')
-async def lookup_command(ctx, value, mode=None):
-    """Look up an Epic account by display name or account ID"""
+async def lookup_command(ctx, *args):
+    """
+    Look up an Epic account by display name, account ID, or platform
+    Usage: 
+    - !lookup <name/id>            - Look up by name or ID
+    - !lookup xbl <gamertag>       - Look up Xbox gamertag
+    - !lookup psn <username>       - Look up PlayStation username
+    - !lookup switch <username>    - Look up Nintendo Switch username
+    """
     # Check premium access
     if not await check_premium_access(ctx):
         return
 
-    if not value:
-        await ctx.send("Please provide a display name or account ID to look up.")
+    # If no arguments are provided, show usage information
+    if not args:
+        await ctx.send("⚠️ Please provide a display name or account ID to look up.\n"
+                     "Usage:\n"
+                     "- `!lookup <name/id>` - Look up by name or ID\n"
+                     "- `!lookup xbl <gamertag>` - Look up Xbox gamertag\n"
+                     "- `!lookup psn <username>` - Look up PlayStation username\n"
+                     "- `!lookup switch <username>` - Look up Nintendo Switch username")
         return
 
-    # Auto-detect mode if not provided
-    if mode is None:
-        mode = "id" if _HEX32.match(value) else "name"
-    elif mode not in ["name", "id"]:
+    # Handle platform-specific lookups
+    platform = None
+    if args[0].lower() in ['xbl', 'xbox', 'x']:
+        # Xbox Live lookup
+        if len(args) < 2:
+            await ctx.send("⚠️ Please provide an Xbox gamertag to look up.\nExample: `!lookup xbl Ninja`")
+            return
+        platform = 'xbl'
+        value = ' '.join(args[1:])  # Allow spaces in gamertag
+        mode = 'name'
+    elif args[0].lower() in ['psn', 'playstation', 'ps', 'ps4', 'ps5']:
+        # PlayStation Network lookup
+        if len(args) < 2:
+            await ctx.send("⚠️ Please provide a PlayStation username to look up.\nExample: `!lookup psn Ninja`")
+            return
+        platform = 'psn'
+        value = ' '.join(args[1:])  # Allow spaces in username
+        mode = 'name'
+    elif args[0].lower() in ['switch', 'nintendo', 'ns']:
+        # Nintendo Switch lookup
+        if len(args) < 2:
+            await ctx.send("⚠️ Please provide a Nintendo Switch username to look up.\nExample: `!lookup switch Ninja`")
+            return
+        platform = 'nintendo'
+        value = ' '.join(args[1:])  # Allow spaces in username
+        mode = 'name'
+    else:
+        # Standard lookup (auto-detect mode)
+        value = ' '.join(args)  # Allow spaces in username/ID
         mode = "id" if _HEX32.match(value) else "name"
 
-    # Quick status message without mentioning proxy
-    lookup_msg = await ctx.send(f"🔍 Looking up Epic account by {mode}: `{value}`...")
+    # Show what we're looking up
+    lookup_type = "account ID" if mode == "id" else "display name" 
+    platform_msg = f" on {platform.upper()}" if platform else ""
+    
+    # Quick status message
+    lookup_msg = await ctx.send(f"🔍 Looking up Epic account by {lookup_type}{platform_msg}: `{value}`...")
     
     # Make the API request
     result = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: epic_lookup(value, mode)
+        None, lambda: epic_lookup(value, mode, platform)
     )
 
-    # Handle errors without mentioning proxies
+    # Handle errors
     if isinstance(result, dict) and result.get("status") in {"ERROR", "INACTIVE", "FORBIDDEN", "INVALID"}:
         await lookup_msg.edit(content=f"❌ {result.get('message', 'Lookup failed')}")
         return
@@ -1124,7 +1192,7 @@ async def lookup_command(ctx, value, mode=None):
             unique_results = deduplicate_accounts(result)
             
             if not unique_results:
-                await ctx.send("❌ No results found.")
+                await ctx.send(f"❌ No results found for `{value}`{platform_msg}.")
                 return
 
             # Show up to 5 matches to avoid spam
@@ -1149,6 +1217,14 @@ async def lookup_command(ctx, value, mode=None):
                             linked_lines.append(f"{platform}: {str(data)}")
                     if linked_lines:
                         embed.add_field(name="Linked Accounts", value="\n".join(linked_lines), inline=False)
+                        
+                # Add API lookup URLs for convenience
+                embed.add_field(
+                    name="API Lookup URLs", 
+                    value=f"By ID: https://api.proswapper.xyz/external/id/{epic_id}\n"
+                          f"By Name: https://api.proswapper.xyz/external/name/{display_name}",
+                    inline=False
+                )
 
                 await ctx.send(embed=embed)
 
@@ -1181,6 +1257,14 @@ async def lookup_command(ctx, value, mode=None):
                         linked_lines.append(f"{platform}: {str(data)}")
                 if linked_lines:
                     embed.add_field(name="Linked Accounts", value="\n".join(linked_lines), inline=False)
+                    
+            # Add API lookup URLs for convenience
+            embed.add_field(
+                name="API Lookup URLs", 
+                value=f"By ID: https://api.proswapper.xyz/external/id/{epic_id}\n"
+                      f"By Name: https://api.proswapper.xyz/external/name/{display_name}",
+                inline=False
+            )
 
             await ctx.send(embed=embed)
             return
@@ -1209,16 +1293,24 @@ async def lookup_command(ctx, value, mode=None):
                         linked_lines.append(f"{platform}: {str(data)}")
                 if linked_lines:
                     embed.add_field(name="Linked Accounts", value="\n".join(linked_lines), inline=False)
+                    
+            # Add API lookup URLs for convenience
+            embed.add_field(
+                name="API Lookup URLs", 
+                value=f"By ID: https://api.proswapper.xyz/external/id/{epic_id}\n"
+                      f"By Name: https://api.proswapper.xyz/external/name/{display_name}",
+                inline=False
+            )
 
             await ctx.send(embed=embed)
             return
 
         # Fallback for unexpected response format (edit the lookup message)
-        await lookup_msg.edit(content=f"❌ Unexpected response format from API")
+        await lookup_msg.edit(content=f"❌ No results found for `{value}`{platform_msg}.")
 
     except Exception as e:
         logger.error(f"Error in lookup command: {e}")
-        await lookup_msg.edit(content=f"❌ Error processing API response")
+        await lookup_msg.edit(content=f"❌ Error processing API response: {str(e)}")
 
 
 @bot.command(name='testproxies')
@@ -1359,10 +1451,19 @@ async def version_info(ctx):
         embed.add_field(name="API Connection", value="Direct connection", inline=False)
         
     embed.set_footer(text=f"Bot is running on {os.name.upper()} platform")
+    
+    # Add API URL examples
+    embed.add_field(
+        name="API Endpoints",
+        value=f"Name Lookup: `https://api.proswapper.xyz/external/name/{{display_name}}`\n"
+              f"ID Lookup: `https://api.proswapper.xyz/external/id/{{epic_account_id}}`\n"
+              f"Example: https://api.proswapper.xyz/external/id/4da439b69f6f418a8fb67db853939d75",
+        inline=False
+    )
+    
     await ctx.send(embed=embed)
 
 
-# Rename from 'help' to 'commands' to avoid conflict with built-in help
 @bot.command(name='commands')
 async def custom_commands_help(ctx):
     """Show help information about the bot commands"""
@@ -1379,9 +1480,13 @@ async def custom_commands_help(ctx):
                     inline=False)
                     
     if ctx.author.id in authorized_users:
-        embed.add_field(name="!lookup [value] [mode]",
+        embed.add_field(name="!lookup [value]",
                         value="Look up an Epic Games account by name or ID\n"
-                              "mode can be 'name' or 'id' (default: auto-detect)",
+                              "Examples:\n"
+                              "- `!lookup Ninja` - Look up by name\n"
+                              "- `!lookup 1234567890abcdef1234567890abcdef` - Look up by ID\n"
+                              "- `!lookup xbl NinjaXbox` - Look up Xbox gamertag\n"
+                              "- `!lookup psn NinjaPS5` - Look up PlayStation username",
                         inline=False)
         
         embed.add_field(name="!testproxies",
@@ -1427,7 +1532,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print("Current Time (UTC): 2025-09-01 11:56:17")
+    print(f"Current Time (UTC): 2025-09-02 05:10:48")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
