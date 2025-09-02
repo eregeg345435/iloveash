@@ -1452,8 +1452,8 @@ async def custom_commands_help(ctx):
     embed.set_footer(text=f"Bot Last Updated: {LAST_UPDATED}")
 
     embed.add_field(name="!pdf [password]",
-                    value="Process an attached PDF file to extract user information
-                              "(Optional password if the PDF is encrypted)",
+                    value="Process an attached PDF file to extract user information"
+                    "(Optional password if the PDF is encrypted)",
                     inline=False)
                     
     if ctx.author.id in authorized_users:
