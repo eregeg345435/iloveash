@@ -4,7 +4,7 @@
 Advanced Discord Bot with PDF Processing
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-02 05:06:20
+Last updated: 2025-09-02 05:21:50
 """
 
 import os
@@ -52,7 +52,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-02 05:06:20"
+LAST_UPDATED = "2025-09-02 05:21:50"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -828,65 +828,12 @@ async def send_pdf_analysis(ctx, info):
     # Get the source filename
     source_file = info.get('source_file', 'Unknown')
 
-    # Start with the header - changed from EMAIL CHANGE ANALYSIS to ACCOUNT ANALYSIS
+    # Start with the header
     output = "**📊 ACCOUNT ANALYSIS**\n\n"
     
-    # First show current account status from API (moved to top)
-    if info.get('account_status'):
-        status_data = info['account_status']
-        
-        if isinstance(status_data, dict) and status_data.get('status') == 'ACTIVE':
-            output += "**🟢 ACCOUNT CURRENTLY ACTIVE**\n"
-            
-            # Include current display name if available
-            if 'displayName' in status_data:
-                output += f"**Current Display Name:** {status_data['displayName']}\n"
-            elif 'display_name' in status_data:
-                output += f"**Current Display Name:** {status_data['display_name']}\n"
-                
-            # Include links if available
-            if 'links' in status_data and status_data['links']:
-                output += "**Current Linked Accounts:**\n"
-                for platform, link_data in status_data['links'].items():
-                    if isinstance(link_data, dict) and 'value' in link_data:
-                        output += f"- {platform}: {link_data['value']}\n"
-                    elif isinstance(link_data, str):
-                        output += f"- {platform}: {link_data}\n"
-                output += "\n"
-            
-            # Include externalAuths if available
-            elif 'externalAuths' in status_data and status_data['externalAuths']:
-                output += "**Current Linked Accounts:**\n"
-                for platform, link_data in status_data['externalAuths'].items():
-                    if isinstance(link_data, dict) and 'externalDisplayName' in link_data:
-                        output += f"- {platform}: {link_data['externalDisplayName']}\n"
-                    elif isinstance(link_data, str):
-                        output += f"- {platform}: {link_data}\n"
-                output += "\n"
-                
-        elif isinstance(status_data, dict) and status_data.get('status') == 'INACTIVE':
-            output += "**🔴 ACCOUNT CURRENTLY INACTIVE**\n"
-            if 'message' in status_data:
-                output += f"{status_data['message']}\n"
-            output += "The account may have been banned, deleted, or changed username.\n\n"
-            
-        elif isinstance(status_data, dict) and status_data.get('status') in ['ERROR', 'FORBIDDEN']:
-            output += "**⚠️ ERROR CHECKING ACCOUNT STATUS**\n"
-            if 'message' in status_data:
-                output += f"{status_data['message']}\n\n"
-        
-        elif isinstance(status_data, dict) and status_data.get('status') == 'INVALID':
-            output += "**⚠️ INVALID ACCOUNT ID FORMAT**\n"
-            if 'message' in status_data:
-                output += f"{status_data['message']}\n\n"
-    else:
-        # Make sure we always show status even if API check failed
-        output += "**⚠️ ACCOUNT STATUS UNKNOWN**\n"
-        output += "Could not check current account status.\n\n"
+    # First show information extracted from the PDF
+    output += f"**Information extracted from:** {source_file}\n\n"
     
-    # Now show the PDF information (moved below current status)
-    output += "**Information extracted from:** " + source_file + "\n\n"
-            
     # Display Names with count if multiple
     if info['display_names']:
         display_names_text = ", ".join(info['display_names'])
@@ -917,7 +864,7 @@ async def send_pdf_analysis(ctx, info):
     if info['oldest_ip']:
         output += f"**Oldest IP:** {info['oldest_ip']}\n"
     
-    # Account Status
+    # Account Status History
     output += "\n**Account Status History:** "
     if info['account_disabled']:
         output += f"Disabled {info['disable_count']} time(s)"
@@ -929,6 +876,49 @@ async def send_pdf_analysis(ctx, info):
             output += ", Reactivated (metadata removed)"
     else:
         output += "No disable/reactivation history found"
+    
+    # Now add current account status from API AFTER the PDF information
+    output += "\n\n**Current Account Status:**\n"
+    if info.get('account_status'):
+        status_data = info['account_status']
+        
+        if isinstance(status_data, dict) and status_data.get('status') == 'ACTIVE':
+            output += "🟢 **ACCOUNT CURRENTLY ACTIVE**\n"
+            
+            # Include current display name if available
+            if 'displayName' in status_data:
+                output += f"**Current Display Name:** {status_data['displayName']}\n"
+            elif 'display_name' in status_data:
+                output += f"**Current Display Name:** {status_data['display_name']}\n"
+                
+            # Include links if available
+            if 'externalAuths' in status_data and status_data['externalAuths']:
+                output += "**Current Linked Accounts:**\n"
+                for platform, data in status_data['externalAuths'].items():
+                    if isinstance(data, dict):
+                        output += f"- {platform}: {data.get('externalDisplayName', 'N/A')}\n"
+                    elif isinstance(data, str):
+                        output += f"- {platform}: {data}\n"
+                
+        elif isinstance(status_data, dict) and status_data.get('status') == 'INACTIVE':
+            output += "🔴 **ACCOUNT CURRENTLY INACTIVE**\n"
+            if 'message' in status_data:
+                output += f"{status_data['message']}\n"
+            output += "The account may have been banned, deleted, or changed username."
+            
+        elif isinstance(status_data, dict) and status_data.get('status') in ['ERROR', 'FORBIDDEN']:
+            output += "⚠️ **ERROR CHECKING ACCOUNT STATUS**\n"
+            if 'message' in status_data:
+                output += f"{status_data['message']}"
+        
+        elif isinstance(status_data, dict) and status_data.get('status') == 'INVALID':
+            output += "⚠️ **INVALID ACCOUNT ID FORMAT**\n"
+            if 'message' in status_data:
+                output += f"{status_data['message']}"
+    else:
+        # Make sure we always show status even if API check failed
+        output += "⚠️ **ACCOUNT STATUS UNKNOWN**\n"
+        output += "Could not check current account status."
     
     # Send the primary information
     await ctx.send(output)
@@ -1217,14 +1207,6 @@ async def lookup_command(ctx, *args):
                             linked_lines.append(f"{platform}: {str(data)}")
                     if linked_lines:
                         embed.add_field(name="Linked Accounts", value="\n".join(linked_lines), inline=False)
-                        
-                # Add API lookup URLs for convenience
-                embed.add_field(
-                    name="API Lookup URLs", 
-                    value=f"By ID: https://api.proswapper.xyz/external/id/{epic_id}\n"
-                          f"By Name: https://api.proswapper.xyz/external/name/{display_name}",
-                    inline=False
-                )
 
                 await ctx.send(embed=embed)
 
@@ -1257,14 +1239,6 @@ async def lookup_command(ctx, *args):
                         linked_lines.append(f"{platform}: {str(data)}")
                 if linked_lines:
                     embed.add_field(name="Linked Accounts", value="\n".join(linked_lines), inline=False)
-                    
-            # Add API lookup URLs for convenience
-            embed.add_field(
-                name="API Lookup URLs", 
-                value=f"By ID: https://api.proswapper.xyz/external/id/{epic_id}\n"
-                      f"By Name: https://api.proswapper.xyz/external/name/{display_name}",
-                inline=False
-            )
 
             await ctx.send(embed=embed)
             return
@@ -1293,14 +1267,6 @@ async def lookup_command(ctx, *args):
                         linked_lines.append(f"{platform}: {str(data)}")
                 if linked_lines:
                     embed.add_field(name="Linked Accounts", value="\n".join(linked_lines), inline=False)
-                    
-            # Add API lookup URLs for convenience
-            embed.add_field(
-                name="API Lookup URLs", 
-                value=f"By ID: https://api.proswapper.xyz/external/id/{epic_id}\n"
-                      f"By Name: https://api.proswapper.xyz/external/name/{display_name}",
-                inline=False
-            )
 
             await ctx.send(embed=embed)
             return
@@ -1452,15 +1418,6 @@ async def version_info(ctx):
         
     embed.set_footer(text=f"Bot is running on {os.name.upper()} platform")
     
-    # Add API URL examples
-    embed.add_field(
-        name="API Endpoints",
-        value=f"Name Lookup: `https://api.proswapper.xyz/external/name/{{display_name}}`\n"
-              f"ID Lookup: `https://api.proswapper.xyz/external/id/{{epic_account_id}}`\n"
-              f"Example: https://api.proswapper.xyz/external/id/4da439b69f6f418a8fb67db853939d75",
-        inline=False
-    )
-    
     await ctx.send(embed=embed)
 
 
@@ -1530,24 +1487,3 @@ if __name__ == "__main__":
         sys.exit(1)
         
     print("Starting bot...")
-    print(f"Last updated: {LAST_UPDATED}")
-    print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 05:10:48")
-    print("Use Ctrl+C to stop")
-    
-    # Find a working proxy before starting the bot
-    print("Testing API connection...")
-    working_proxy = find_working_proxy()
-    if working_proxy:
-        print(f"✅ API connection ready (proxy mode)")
-    else:
-        print("⚠️ No working proxy found, will use direct connections")
-    
-    try:
-        bot.run(BOT_TOKEN)
-    except discord.errors.LoginFailure:
-        print("ERROR: Invalid bot token. Please check your DISCORD_BOT_TOKEN environment variable.")
-        sys.exit(1)
-    except Exception as e:
-        print(f"ERROR: Failed to start the bot: {e}")
-        sys.exit(1)
