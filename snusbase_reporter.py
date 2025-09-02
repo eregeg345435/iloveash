@@ -5,7 +5,7 @@ Advanced Discord Bot with PDF Processing and Snusbase Integration
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
 - Processes Twitter usernames through Snusbase API (Premium Command)
-Last updated: 2025-09-02 12:12:11
+Last updated: 2025-09-02 12:29:57
 """
 
 import os
@@ -54,7 +54,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-02 12:12:11"
+LAST_UPDATED = "2025-09-02 12:29:57"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -387,8 +387,20 @@ async def check_account_status(account_id):
             lambda: epic_lookup(account_id, mode="id")
         )
         
-        # Handle different response types
-        if isinstance(result, dict):
+        # Handle array response format (as shown in the screenshots)
+        if isinstance(result, list):
+            if len(result) > 0 and isinstance(result[0], dict):
+                # Account is active - contains data
+                account_data = result[0]
+                account_data["status"] = "ACTIVE"
+                logger.info(f"Account is ACTIVE: {account_data}")
+                return account_data
+            else:
+                # Empty array means inactive account
+                return {"status": "INACTIVE", "message": "Account not found or inactive"}
+                
+        # Handle dictionary response format
+        elif isinstance(result, dict):
             if "status" not in result:
                 if "displayName" in result:
                     # If account is active and has display name
@@ -1442,7 +1454,7 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
             return
         except Exception as e:
             logger.error(f"Error processing PDF: {str(e)}\n{traceback.format_exc()}")
-            await ctx.send(f"❌ Error processing PDF: {str(e)}")
+                        await ctx.send(f"❌ Error processing PDF: {str(e)}")
             return
 
     except Exception as e:
@@ -1456,7 +1468,7 @@ async def send_pdf_analysis(ctx, info):
     Send a clean PDF analysis format with account status information.
     Format matches the example in the screenshot.
     """
-        # Get the source filename
+    # Get the source filename
     source_file = info.get('source_file', 'Unknown')
     
     # Start building the output
@@ -1468,12 +1480,6 @@ async def send_pdf_analysis(ctx, info):
     # Make sure account_status is a dictionary to prevent errors
     if account_status is None:
         account_status = {"status": "INACTIVE", "message": "Could not check current account status"}
-    elif isinstance(account_status, list):
-        # Convert list to dict if API returned a list instead of a dict
-        if len(account_status) > 0 and isinstance(account_status[0], dict):
-            account_status = account_status[0]  # Take the first item if it's a dict
-        else:
-            account_status = {"status": "INACTIVE", "message": "Unexpected API response format"}
     
     # Format based on status
     status = account_status.get("status", "INACTIVE").upper() if isinstance(account_status, dict) else "INACTIVE"
@@ -1486,14 +1492,25 @@ async def send_pdf_analysis(ctx, info):
             output += f"Current Display Name: {account_status['displayName']}\n"
         
         # Include linked accounts if available
-        if isinstance(account_status, dict) and 'externalAuths' in account_status and account_status['externalAuths']:
-            output += "Linked Accounts:\n"
-            for platform, data in account_status['externalAuths'].items():
-                if isinstance(data, dict) and 'externalDisplayName' in data:
-                    output += f"- {platform}: {data.get('externalDisplayName', 'N/A')}\n"
-                elif isinstance(data, str):
-                    output += f"- {platform}: {data}\n"
-            output += "\n"
+        if isinstance(account_status, dict):
+            # Check for externalAuths
+            external_auths = account_status.get("externalAuths", {})
+            if external_auths and isinstance(external_auths, dict) and len(external_auths) > 0:
+                output += "Linked Accounts:\n"
+                for platform, data in external_auths.items():
+                    if isinstance(data, dict) and 'externalDisplayName' in data:
+                        output += f"- {platform}: {data.get('externalDisplayName', 'N/A')}\n"
+                    elif isinstance(data, str):
+                        output += f"- {platform}: {data}\n"
+                output += "\n"
+            
+            # Check for links
+            links = account_status.get("links", {})
+            if links and isinstance(links, dict) and len(links) > 0:
+                output += "Account Links:\n"
+                for link_type, link_data in links.items():
+                    output += f"- {link_type}: {str(link_data)}\n"
+                output += "\n"
     elif status == "INACTIVE" or status == "ERROR" or status == "UNKNOWN":
         output += "**🔴 ACCOUNT CURRENTLY INACTIVE**\n"
         if isinstance(account_status, dict) and 'message' in account_status:
@@ -1928,6 +1945,55 @@ async def lookup_command(ctx, *, query=None):
             await ctx.send(embed=embed)
             return
 
+        # Handle list response for ID lookup (from your screenshots)
+        elif mode == "id" and isinstance(result, list):
+            # Remove the lookup message since we'll send an embed
+            await lookup_msg.delete()
+            
+            if len(result) > 0 and isinstance(result[0], dict):
+                # Active account - first item has account data
+                account_data = result[0]
+                display_name = account_data.get("displayName", "Unknown")
+                epic_id = account_data.get("id", query)  # fall back to input
+                
+                # Create the embed with status information at the top
+                embed = discord.Embed(
+                    title=f"Epic Account (by ID): {display_name}",
+                    color=discord.Color.green()
+                )
+                
+                # Add status field at the top
+                embed.add_field(name="Status", value="🟢 ACCOUNT CURRENTLY ACTIVE", inline=False)
+                
+                # Add the account ID
+                embed.add_field(name="Account ID", value=epic_id, inline=False)
+
+                # Add external accounts if available
+                external = account_data.get("externalAuths") or {}
+                if external:
+                    linked_lines = []
+                    for platform, data in external.items():
+                        if isinstance(data, dict):
+                            linked_lines.append(f"{platform}: {data.get('externalDisplayName', 'N/A')}")
+                        else:
+                            linked_lines.append(f"{platform}: {str(data)}")
+                    if linked_lines:
+                        embed.add_field(name="Linked Accounts", value="\n".join(linked_lines), inline=False)
+
+                await ctx.send(embed=embed)
+            else:
+                # Empty array means inactive account
+                embed = discord.Embed(
+                    title=f"Epic Account (by ID): {query}",
+                    color=discord.Color.red()
+                )
+                embed.add_field(name="Status", value="🔴 ACCOUNT CURRENTLY INACTIVE", inline=False)
+                embed.add_field(name="Account ID", value=query, inline=False)
+                embed.add_field(name="Message", value="Account not found or inactive", inline=False)
+                
+                await ctx.send(embed=embed)
+            return
+
         # Fallback for unexpected response format (edit the lookup message)
         await lookup_msg.edit(content=f"❌ No results found for `{query}`.")
 
@@ -2164,7 +2230,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 12:16:51")
+    print(f"Current Time (UTC): 2025-09-02 12:37:30")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
