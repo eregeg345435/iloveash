@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 DEBIAN_FRONTEND=noninteractive
 
-# System deps for Chrome + fonts + shared libs
+# Install Chrome + dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates wget gnupg unzip \
     fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 \
@@ -14,7 +14,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxss1 libxtst6 libgbm1 libu2f-udev xdg-utils \
  && rm -rf /var/lib/apt/lists/*
 
-# Install Google Chrome stable
 RUN mkdir -p /etc/apt/keyrings \
  && wget -qO- https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor > /etc/apt/keyrings/google-chrome.gpg \
  && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
