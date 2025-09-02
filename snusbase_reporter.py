@@ -1469,7 +1469,7 @@ async def custom_commands_help(ctx):
                     inline=False)
                     
     if ctx.author.id in authorized_users:
-                embed.add_field(name="!lookup [value]",
+        embed.add_field(name="!lookup [value]",
                         value="Look up an Epic Games account by name or ID\n"
                               "Examples:\n"
                               "- `!lookup Ninja` - Look up by name\n"
@@ -1521,7 +1521,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 06:36:51")
+    print(f"Current Time (UTC): 2025-09-02 07:39:37")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
