@@ -6,7 +6,7 @@ services:
     plan: starter
     disk:
       name: bot-data
-      mountPath: /data   # this creates /data with write access
+      mountPath: /data     # gives you /data with write access
       sizeGB: 1
     envVars:
       - key: DISCORD_BOT_TOKEN
