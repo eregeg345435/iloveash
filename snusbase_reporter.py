@@ -1467,9 +1467,9 @@ async def send_pdf_analysis(ctx, info):
     if info['oldest_ip']:
         output += f"**Oldest IP:** {info['oldest_ip']}\n"
     
-    # Account Status History
+        # Account Status History
     output += "\n**Account Status History:** "
-        if info['account_disabled']:
+    if info['account_disabled']:
         output += f"Disabled {info['disable_count']} time(s)"
         if info['reactivated']:
             output += f", Reactivated {info['reactivate_count']} time(s)"
