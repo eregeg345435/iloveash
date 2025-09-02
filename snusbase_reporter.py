@@ -1448,7 +1448,28 @@ async def send_pdf_analysis(ctx, info):
     if info['email']:
         output += f"**Current Email:** {info['email']}\n"
     
-    # Account ID    if info['account_disabled']:
+    # Account ID
+    if info['account_id']:
+        output += f"**Account ID:** {info['account_id']}\n"
+    
+    # Creation Date
+    if info['creation_date']:
+        output += f"**Creation Date:** {info['creation_date']}\n"
+    
+    # Platform - now includes platform token if available
+    if info['platform']:
+        if info['platform_token']:
+            output += f"**Platform:** {info['platform']} [{info['platform_token']}]\n"
+        else:
+            output += f"**Platform:** {info['platform']}\n"
+    
+    # Oldest IP
+    if info['oldest_ip']:
+        output += f"**Oldest IP:** {info['oldest_ip']}\n"
+    
+    # Account Status History
+    output += "\n**Account Status History:** "
+        if info['account_disabled']:
         output += f"Disabled {info['disable_count']} time(s)"
         if info['reactivated']:
             output += f", Reactivated {info['reactivate_count']} time(s)"
@@ -2094,4 +2115,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"ERROR: Failed to start the bot: {e}")
         sys.exit(1)
-    
