@@ -5,7 +5,7 @@ Advanced Discord Bot with PDF Processing and Snusbase Integration
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
 - Processes Twitter usernames through Snusbase API (Premium Command)
-Last updated: 2025-09-02 10:14:03
+Last updated: 2025-09-02 12:12:11
 """
 
 import os
@@ -54,7 +54,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-02 10:14:03"
+LAST_UPDATED = "2025-09-02 12:12:11"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -1429,7 +1429,7 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
 
                     # Send the unlocked PDF as a Discord attachment
                     await ctx.send("Here is the unlocked PDF:",
-                                   file=discord.File(temp_file.name, f"unlocked_{attachment.filename}"))
+                                  file=discord.File(temp_file.name, f"unlocked_{attachment.filename}"))
 
                     # Delete the temporary file
                     os.unlink(temp_file.name)
@@ -1438,7 +1438,7 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
                     await ctx.send("Error saving the unlocked PDF.")
 
         except PyPDF2.errors.PdfReadError as e:
-                        await ctx.send(f"❌ Error: Cannot read the PDF file. It may be corrupted or not a valid PDF. {str(e)}")
+            await ctx.send(f"❌ Error: Cannot read the PDF file. It may be corrupted or not a valid PDF. {str(e)}")
             return
         except Exception as e:
             logger.error(f"Error processing PDF: {str(e)}\n{traceback.format_exc()}")
@@ -1456,7 +1456,7 @@ async def send_pdf_analysis(ctx, info):
     Send a clean PDF analysis format with account status information.
     Format matches the example in the screenshot.
     """
-    # Get the source filename
+        # Get the source filename
     source_file = info.get('source_file', 'Unknown')
     
     # Start building the output
@@ -2164,7 +2164,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 10:28:23")
+    print(f"Current Time (UTC): 2025-09-02 12:16:51")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
