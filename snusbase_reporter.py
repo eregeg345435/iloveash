@@ -1362,6 +1362,16 @@ async def version_info(ctx):
     await ctx.send(embed=embed)
 
 
+@bot.command(name='hey')
+async def hey_command(ctx):
+    """Respond with a friendly greeting"""
+    # Check premium access
+    if not await check_premium_access(ctx):
+        return
+    
+    await ctx.send(f"Hey there, {ctx.author.mention}! 👋 How can I help you today?")
+
+
 # Rename from 'help' to 'commands' to avoid conflict with built-in help
 @bot.command(name='commands')
 async def custom_commands_help(ctx):
@@ -1405,6 +1415,10 @@ async def custom_commands_help(ctx):
 
         embed.add_field(name="!version",
                         value="Show version information for the bot",
+                        inline=False)
+
+        embed.add_field(name="!hey",
+                        value="Get a friendly greeting from the bot",
                         inline=False)
 
         embed.add_field(name="!commands",
