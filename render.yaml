@@ -6,12 +6,10 @@ services:
     plan: starter
     disk:
       name: bot-data
-      mountPath: /data
+      mountPath: /data   # this creates /data with write access
       sizeGB: 1
     envVars:
       - key: DISCORD_BOT_TOKEN
-        sync: false   # set this in Render dashboard
-      - key: HEALTH_WEBHOOK_URL
-        sync: false   # optional webhook for health pings
+        sync: false
       - key: DATA_DIR
         value: /data
