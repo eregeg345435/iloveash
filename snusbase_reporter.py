@@ -5,7 +5,7 @@ Advanced Discord Bot with PDF Processing and Snusbase Integration
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
 - Processes Twitter usernames through Snusbase API (Premium Command)
-Last updated: 2025-09-02 12:46:18
+Last updated: 2025-09-02 12:57:45
 """
 
 import os
@@ -54,7 +54,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-02 12:46:18"
+LAST_UPDATED = "2025-09-02 12:57:45"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -1435,7 +1435,7 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
 
                 try:
                     # Create a temporary file for the unlocked PDF
-                    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
+                                        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
                         # Write the unlocked PDF to the temporary file
                         pdf_writer.write(temp_file)
 
@@ -1447,7 +1447,7 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
                     os.unlink(temp_file.name)
                 except Exception as e:
                     logger.error(f"Error saving unlocked PDF: {str(e)}")
-                                       await ctx.send("Error saving the unlocked PDF.")
+                    await ctx.send("Error saving the unlocked PDF.")
 
         except PyPDF2.errors.PdfReadError as e:
             await ctx.send(f"❌ Error: Cannot read the PDF file. It may be corrupted or not a valid PDF. {str(e)}")
@@ -1613,7 +1613,7 @@ async def on_ready():
     print(f"Bot is ready! Logged in as {bot.user.name}")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): {LAST_UPDATED}")
+    print(f"Current Time (UTC): 2025-09-02 13:02:59")
     
     # Start proxy maintenance task
     bot.loop.create_task(proxy_maintenance_task())
@@ -2230,7 +2230,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 12:51:54")
+    print(f"Current Time (UTC): 2025-09-02 13:02:59")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
