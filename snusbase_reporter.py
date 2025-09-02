@@ -4,7 +4,7 @@
 Advanced Discord Bot with PDF Processing
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
-Last updated: 2025-09-02 07:44:17
+Last updated: 2025-09-02 08:11:37
 """
 
 import os
@@ -52,7 +52,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-02 07:44:17"
+LAST_UPDATED = "2025-09-02 08:11:37"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -264,7 +264,7 @@ def get_api_response(url, timeout=8.0):
         return {"status": "ERROR", "message": f"Error: {str(e)}"}
 
 
-def epic_lookup(value, mode=None, platform=None):
+def epic_lookup(value, mode=None):
     """
     Look up Epic account info by display name or account ID.
     Uses a working proxy if available.
@@ -272,7 +272,6 @@ def epic_lookup(value, mode=None, platform=None):
     Parameters:
     - value: The display name or account ID to look up
     - mode: 'name', 'id', or None (auto-detect)
-    - platform: Optional platform filter ('xbl', 'psn', etc.)
     """
     if not value or value.strip() == "":
         return {"status": "ERROR", "message": "Please provide a display name or account ID"}
@@ -291,19 +290,6 @@ def epic_lookup(value, mode=None, platform=None):
     
     # Make the API request
     response = get_api_response(url)
-    
-    # If we got a platform filter and the response is a list, filter it
-    if platform and isinstance(response, list):
-        filtered_results = []
-        for account in response:
-            if 'externalAuths' in account:
-                # Check if the account has the requested platform
-                if platform.lower() in account['externalAuths']:
-                    filtered_results.append(account)
-        
-        # Return filtered results if we found any, otherwise return the original response
-        if filtered_results:
-            return filtered_results
     
     return response
 
@@ -850,19 +836,30 @@ async def send_pdf_analysis(ctx, info):
     output = "**📊 ACCOUNT ANALYSIS**\n\n"
     
     # Add account status at the top (like in the screenshot)
-    account_status = info.get('account_status', {"status": "UNKNOWN", "message": "Could not check current account status"})
+    account_status = info.get('account_status')
+    
+    # Make sure account_status is a dictionary to prevent 'list' object has no attribute 'get' error
+    if account_status is None:
+        account_status = {"status": "UNKNOWN", "message": "Could not check current account status"}
+    elif isinstance(account_status, list):
+        # Convert list to dict if API returned a list instead of a dict
+        if len(account_status) > 0 and isinstance(account_status[0], dict):
+            account_status = account_status[0]  # Take the first item if it's a dict
+        else:
+            account_status = {"status": "UNKNOWN", "message": "Unexpected API response format"}
     
     # Format based on status
-    status = account_status.get("status", "UNKNOWN").upper()
+    status = account_status.get("status", "UNKNOWN").upper() if isinstance(account_status, dict) else "UNKNOWN"
+    
     if status == "ACTIVE":
         output += "**🟢 ACCOUNT CURRENTLY ACTIVE**\n"
         
         # Include current display name if available
-        if 'displayName' in account_status:
+        if isinstance(account_status, dict) and 'displayName' in account_status:
             output += f"Current Display Name: {account_status['displayName']}\n"
         
         # Include linked accounts if available
-        if 'externalAuths' in account_status and account_status['externalAuths']:
+        if isinstance(account_status, dict) and 'externalAuths' in account_status and account_status['externalAuths']:
             output += "Linked Accounts:\n"
             for platform, data in account_status['externalAuths'].items():
                 if isinstance(data, dict) and 'externalDisplayName' in data:
@@ -872,7 +869,7 @@ async def send_pdf_analysis(ctx, info):
             output += "\n"
     elif status == "INACTIVE":
         output += "**🔴 ACCOUNT CURRENTLY INACTIVE**\n"
-        if 'message' in account_status:
+        if isinstance(account_status, dict) and 'message' in account_status:
             output += f"{account_status['message']}\n"
         output += "The account may have been banned, deleted, or changed username.\n\n"
     else:
@@ -1106,70 +1103,35 @@ async def process_pdf_command(ctx, password=None):
 
 
 @bot.command(name='lookup')
-async def lookup_command(ctx, *args):
+async def lookup_command(ctx, *, query=None):
     """
-    Look up an Epic account by display name, account ID, or platform
+    Look up an Epic account by display name or account ID
     Usage: 
-    - !lookup <name/id>            - Look up by name or ID
-    - !lookup xbl <gamertag>       - Look up Xbox gamertag
-    - !lookup psn <username>       - Look up PlayStation username
-    - !lookup switch <username>    - Look up Nintendo Switch username
+    - !lookup <name>  - Look up by display name
+    - !lookup <id>    - Look up by account ID
     """
     # Check premium access
     if not await check_premium_access(ctx):
         return
 
-    # If no arguments are provided, show usage information
-    if not args:
+    # If no query is provided, show usage information
+    if not query:
         await ctx.send("⚠️ Please provide a display name or account ID to look up.\n"
                      "Usage:\n"
-                     "- `!lookup <name/id>` - Look up by name or ID\n"
-                     "- `!lookup xbl <gamertag>` - Look up Xbox gamertag\n"
-                     "- `!lookup psn <username>` - Look up PlayStation username\n"
-                     "- `!lookup switch <username>` - Look up Nintendo Switch username")
+                     "- `!lookup <name>` - Look up by display name\n"
+                     "- `!lookup <id>` - Look up by account ID")
         return
 
-    # Handle platform-specific lookups
-    platform = None
-    if args[0].lower() in ['xbl', 'xbox', 'x']:
-        # Xbox Live lookup
-        if len(args) < 2:
-            await ctx.send("⚠️ Please provide an Xbox gamertag to look up.\nExample: `!lookup xbl Ninja`")
-            return
-        platform = 'xbl'
-        value = ' '.join(args[1:])  # Allow spaces in gamertag
-        mode = 'name'
-    elif args[0].lower() in ['psn', 'playstation', 'ps', 'ps4', 'ps5']:
-        # PlayStation Network lookup
-        if len(args) < 2:
-            await ctx.send("⚠️ Please provide a PlayStation username to look up.\nExample: `!lookup psn Ninja`")
-            return
-        platform = 'psn'
-        value = ' '.join(args[1:])  # Allow spaces in username
-        mode = 'name'
-    elif args[0].lower() in ['switch', 'nintendo', 'ns']:
-        # Nintendo Switch lookup
-        if len(args) < 2:
-            await ctx.send("⚠️ Please provide a Nintendo Switch username to look up.\nExample: `!lookup switch Ninja`")
-            return
-        platform = 'nintendo'
-        value = ' '.join(args[1:])  # Allow spaces in username
-        mode = 'name'
-    else:
-        # Standard lookup (auto-detect mode)
-        value = ' '.join(args)  # Allow spaces in username/ID
-        mode = "id" if _HEX32.match(value) else "name"
-
-    # Show what we're looking up
-    lookup_type = "account ID" if mode == "id" else "display name" 
-    platform_msg = f" on {platform.upper()}" if platform else ""
+    # Determine if this is an ID or name lookup
+    mode = "id" if _HEX32.match(query) else "name"
+    lookup_type = "account ID" if mode == "id" else "display name"
     
     # Quick status message
-    lookup_msg = await ctx.send(f"🔍 Looking up Epic account by {lookup_type}{platform_msg}: `{value}`...")
+    lookup_msg = await ctx.send(f"🔍 Looking up Epic account by {lookup_type}: `{query}`...")
     
     # Make the API request
     result = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: epic_lookup(value, mode, platform)
+        None, lambda: epic_lookup(query, mode)
     )
 
     # Handle errors
@@ -1187,7 +1149,7 @@ async def lookup_command(ctx, *args):
             unique_results = deduplicate_accounts(result)
             
             if not unique_results:
-                await ctx.send(f"❌ No results found for `{value}`{platform_msg}.")
+                await ctx.send(f"❌ No results found for display name: `{query}`.")
                 return
 
             # Show up to 5 matches to avoid spam
@@ -1195,10 +1157,25 @@ async def lookup_command(ctx, *args):
                 display_name = acc.get("displayName", "Unknown")
                 epic_id = acc.get("id", "Unknown")
 
+                # Determine status and color
+                if "status" not in acc:
+                    acc["status"] = "ACTIVE"  # Default to active if no status
+                
+                color = discord.Color.green() if acc.get("status") == "ACTIVE" else discord.Color.red()
+
                 embed = discord.Embed(
                     title=f"Epic Account (name match): {display_name}",
-                    color=discord.Color.green()
+                    color=color
                 )
+                
+                # Add status field at the top
+                if acc.get("status") == "ACTIVE":
+                    embed.add_field(name="Status", value="🟢 ACCOUNT CURRENTLY ACTIVE", inline=False)
+                elif acc.get("status") == "INACTIVE":
+                    embed.add_field(name="Status", value="🔴 ACCOUNT CURRENTLY INACTIVE", inline=False)
+                else:
+                    embed.add_field(name="Status", value="⚠️ ACCOUNT STATUS UNKNOWN", inline=False)
+                
                 embed.add_field(name="Account ID", value=epic_id, inline=False)
 
                 # externalAuths may be empty {}
@@ -1226,7 +1203,7 @@ async def lookup_command(ctx, *args):
             await lookup_msg.delete()
             
             display_name = result.get("displayName", "Unknown")
-            epic_id = result.get("id", value)  # fall back to input
+            epic_id = result.get("id", query)  # fall back to input
             
             # Set the status for lookup
             if "status" not in result:
@@ -1315,7 +1292,7 @@ async def lookup_command(ctx, *args):
             return
 
         # Fallback for unexpected response format (edit the lookup message)
-        await lookup_msg.edit(content=f"❌ No results found for `{value}`{platform_msg}.")
+        await lookup_msg.edit(content=f"❌ No results found for `{query}`.")
 
     except Exception as e:
         logger.error(f"Error in lookup command: {e}")
@@ -1484,9 +1461,7 @@ async def custom_commands_help(ctx):
                         value="Look up an Epic Games account by name or ID\n"
                               "Examples:\n"
                               "- `!lookup Ninja` - Look up by name\n"
-                              "- `!lookup 1234567890abcdef1234567890abcdef` - Look up by ID\n"
-                              "- `!lookup xbl NinjaXbox` - Look up Xbox gamertag\n"
-                              "- `!lookup psn NinjaPS5` - Look up PlayStation username",
+                              "- `!lookup 1234567890abcdef1234567890abcdef` - Look up by ID",
                         inline=False)
         
         embed.add_field(name="!testproxies",
@@ -1512,7 +1487,7 @@ async def custom_commands_help(ctx):
                         value="Show version information for the bot",
                         inline=False)
 
-        embed.add_field(name="!commands",
+                embed.add_field(name="!commands",
                         value="Show this help message",
                         inline=False)
 
@@ -1532,7 +1507,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 07:59:16")
+    print(f"Current Time (UTC): 2025-09-02 08:25:16")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
