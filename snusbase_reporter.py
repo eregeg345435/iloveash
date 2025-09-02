@@ -5,7 +5,7 @@ Advanced Discord Bot with PDF Processing and Snusbase Integration
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
 - Processes Twitter usernames through Snusbase API (Premium Command)
-Last updated: 2025-09-02 14:20:00
+Last updated: 2025-09-02 14:23:34
 """
 
 import os
@@ -1431,7 +1431,7 @@ async def process_pdf(ctx, attachment, password=None, delete_message=True):
 
                 try:
                     # Create a temporary file for the unlocked PDF
-                                        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
+                    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
                         # Write the unlocked PDF to the temporary file
                         pdf_writer.write(temp_file)
 
