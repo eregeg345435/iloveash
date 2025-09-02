@@ -5,7 +5,7 @@ Advanced Discord Bot with PDF Processing and Snusbase Integration
 - Extracts information from and unlocks PDF files
 - Checks Epic Games account status via API
 - Processes Twitter usernames through Snusbase API (Premium Command)
-Last updated: 2025-09-02 13:45:22
+Last updated: 2025-09-02 13:55:35
 """
 
 import os
@@ -54,7 +54,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")  # Empty default, must be set in 
 PREMIUM_PASSWORD = "ZavsMasterKey2025"
 
 # Bot version info
-LAST_UPDATED = "2025-09-02 13:45:22"
+LAST_UPDATED = "2025-09-02 13:55:35"
 BOT_USER = "eregeg345435"
 
 # Epic API base URL
@@ -977,11 +977,6 @@ def query_snusbase_api(term, search_type, max_retries=5, backoff_factor=1.5):
                     entry["breach"] = db
                     all_results.append(entry)
             logger.info(f"Snusbase API Return: {len(all_results)} results for '{term}'")
-            if all_results:
-                for entry in all_results:
-                    logger.info(f"  [Breach] {entry.get('breach', '')} | email: {entry.get('email', '')}")
-            else:
-                logger.info(f"  [API RETURN] No entries for '{term}'.")
             return all_results
         except requests.exceptions.HTTPError as e:
             if resp.status_code == 503:
@@ -1020,22 +1015,23 @@ async def _first_pass_one(user: Dict[str, str]) -> Tuple[str, Dict[str, str], Li
         return ident, {"status": "NO_RESULTS", "twitter_handle": handle}, []
 
     emails = []
-    found_twitter_breach = False
+    found_in_target_breach = False
     for res in results:
         breach_name = res.get("breach", "")
         email_val = res.get("email", "")
         
-        # Check if the breach is the one we are looking for
+        # This is the corrected filtering logic based on your working code.
         if BREACH_FILTER and BREACH_FILTER.lower() in breach_name.lower():
             if email_val and email_val not in emails:
                 logger.info(f"Found matching email '{email_val}' for @{handle} in breach '{breach_name}'")
                 emails.append(email_val)
-                found_twitter_breach = True
+                found_in_target_breach = True
 
-    if not found_twitter_breach:
-        logger.info(f"No emails found in '{BREACH_FILTER}' breach for @{handle}")
-        return ident, {"status": "NO_RESULTS", "reason": "no twitter.com email found", "twitter_handle": handle}, []
+    if not found_in_target_breach:
+        logger.info(f"No emails found specifically in '{BREACH_FILTER}' breaches for @{handle}")
+        return ident, {"status": "NO_RESULTS", "reason": f"no email in {BREACH_FILTER} breach", "twitter_handle": handle}, []
 
+    logger.info(f"First Pass successful for @{handle}: Found {len(emails)} email(s).")
     return ident, {"status": "OK", "twitter_handle": handle, "emails_found": len(emails)}, emails
 
 
@@ -1160,7 +1156,7 @@ async def first_pass_with_channels(users: List[Dict[str, str]], pre_search_chann
             if status == "OK":
                 text += f" ({len(emails)} emails found)"
             elif status == "NO_RESULTS":
-                text += " (no results)"
+                text += f" (no results - {result.get('reason', 'unknown')})"
             elif status == "SKIP":
                 text += " (skipped)"
 
@@ -1590,7 +1586,7 @@ async def on_ready():
     print(f"Bot is ready! Logged in as {bot.user.name}")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 13:45:22")
+    print(f"Current Time (UTC): 2025-09-02 13:55:35")
     
     # Start proxy maintenance task
     bot.loop.create_task(proxy_maintenance_task())
@@ -2207,7 +2203,7 @@ if __name__ == "__main__":
     print("Starting bot...")
     print(f"Last updated: {LAST_UPDATED}")
     print(f"User: {BOT_USER}")
-    print(f"Current Time (UTC): 2025-09-02 13:45:22")
+    print(f"Current Time (UTC): 2025-09-02 13:55:35")
     print("Use Ctrl+C to stop")
     
     # Find a working proxy before starting the bot
